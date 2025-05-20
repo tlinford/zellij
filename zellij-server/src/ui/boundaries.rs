@@ -50,7 +50,7 @@ impl BoundarySymbol {
     }
     pub fn as_terminal_character(&self) -> Result<TerminalCharacter> {
         let tc = if self.invisible {
-            EMPTY_TERMINAL_CHARACTER
+            EMPTY_TERMINAL_CHARACTER()
         } else {
             let character = self
                 .boundary_type
@@ -64,7 +64,7 @@ impl BoundarySymbol {
                     )
                 })?;
             TerminalCharacter::new_singlewidth_styled(
-                character,
+                character.to_string(),
                 RESET_STYLES
                     .foreground(self.color.map(|palette_color| palette_color.0.into()))
                     .into(),

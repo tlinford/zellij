@@ -65,17 +65,24 @@ impl<'a> SearchSource<'a> {
     // Get the char at hidx and, if existing, the following char as well
     fn get_next_two_chars(&self, hidx: usize, whole_word_search: bool) -> (char, Option<char>) {
         // Get the current haystack character
+        // TODO: check all these usages of chars().last().unwrap(), needed something to make it compile
         let haystack_char = match self {
-            SearchSource::Main(row) => row.columns[hidx].character,
-            SearchSource::Tail(tail) => tail.columns[hidx].character,
+            SearchSource::Main(row) => row.columns[hidx].character.chars().last().unwrap(),
+            SearchSource::Tail(tail) => tail.columns[hidx].character.chars().last().unwrap(),
         };
 
         // Get the next haystack character (relevant for whole-word search only)
         let next_haystack_char = if whole_word_search {
             // Everything (incl. end of line) that is not [a-zA-Z0-9_] is considered a word boundary
             match self {
-                SearchSource::Main(row) => row.columns.get(hidx + 1).map(|c| c.character),
-                SearchSource::Tail(tail) => tail.columns.get(hidx + 1).map(|c| c.character),
+                SearchSource::Main(row) => row
+                    .columns
+                    .get(hidx + 1)
+                    .map(|c| c.character.chars().last().unwrap()),
+                SearchSource::Tail(tail) => tail
+                    .columns
+                    .get(hidx + 1)
+                    .map(|c| c.character.chars().last().unwrap()),
             }
         } else {
             None // Doesn't get used, when not doing whole-word search
@@ -135,7 +142,7 @@ impl SearchResult {
                     .iter_mut()
                     .skip(skip)
                     .take(take)
-                    .for_each(|x| *x = TerminalCharacter::new(replacement_char));
+                    .for_each(|x| *x = TerminalCharacter::new(replacement_char.to_string()));
             }
         }
     }
@@ -220,16 +227,19 @@ impl SearchResult {
                         nidx = 0;
                         ridx = start.unwrap().line() as usize;
                         hidx = start.unwrap().column(); // Will be incremented below
+                                                        // TODO: check all these usages of chars().last().unwrap(), needed something to make it compile
+
                         if start.unwrap().line() as usize == orig_ridx {
                             source = SearchSource::Main(row);
-                            haystack_char = row.columns[hidx].character; // so that prev_char gets set correctly
+                            haystack_char = row.columns[hidx].character.chars().last().unwrap();
+                        // so that prev_char gets set correctly
                         } else {
                             // The -1 comes from the main row
                             let tail_idx = start.unwrap().line() as usize - orig_ridx - 1;
                             // We have to reset the tail-iterator as well.
                             tailit = tail[tail_idx..].iter();
                             let trow = tailit.next().unwrap();
-                            haystack_char = trow.columns[hidx].character; // so that prev_char gets set correctly
+                            haystack_char = trow.columns[hidx].character.chars().last().unwrap(); // so that prev_char gets set correctly
                             source = SearchSource::Tail(trow);
                         }
                         start = None;

@@ -437,7 +437,7 @@ impl Pane for TerminalPane {
             let mut character_under_cursor = self
                 .grid
                 .get_character_under_cursor()
-                .unwrap_or(EMPTY_TERMINAL_CHARACTER);
+                .unwrap_or(EMPTY_TERMINAL_CHARACTER());
             character_under_cursor.styles.update(|styles| {
                 styles.background = Some(cursor_color.into());
                 styles.foreground = Some(text_color.into());
@@ -450,7 +450,7 @@ impl Pane for TerminalPane {
                 self.get_content_x() + cursor_x + 1,
                 &character_under_cursor.styles,
             );
-            fake_cursor.push(character_under_cursor.character);
+            fake_cursor.push_str(&character_under_cursor.character);
             vte_output = Some(fake_cursor);
         }
         vte_output

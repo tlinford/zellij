@@ -323,7 +323,7 @@ pub fn take_snapshot(terminal_output: &mut TerminalPane) -> String {
                     continue;
                 }
             }
-            snapshot.push(terminal_character.character);
+            snapshot.push_str(&terminal_character.character);
         }
         if line_index != output_lines.len() - 1 {
             snapshot.push('\n');

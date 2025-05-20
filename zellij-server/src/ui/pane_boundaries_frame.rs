@@ -22,7 +22,7 @@ fn foreground_color(characters: &str, color: Option<PaletteColor>) -> Vec<Termin
                 None => {},
             }
         });
-        let terminal_character = TerminalCharacter::new_styled(character, styles);
+        let terminal_character = TerminalCharacter::new_styled(character.to_string(), styles);
         colored_string.push(terminal_character);
     }
     colored_string
@@ -39,7 +39,7 @@ fn background_color(characters: &str, color: Option<PaletteColor>) -> Vec<Termin
             },
             None => {},
         });
-        let terminal_character = TerminalCharacter::new_styled(character, styles);
+        let terminal_character = TerminalCharacter::new_styled(character.to_string(), styles);
         colored_string.push(terminal_character);
     }
     colored_string
@@ -249,17 +249,17 @@ impl PaneFrame {
         let full_indication_text = "MY FOCUS";
         let mut full_indication = vec![];
         full_indication.append(&mut left_separator);
-        full_indication.push(EMPTY_TERMINAL_CHARACTER);
+        full_indication.push(EMPTY_TERMINAL_CHARACTER());
         full_indication.append(&mut foreground_color(full_indication_text, self.color));
-        full_indication.push(EMPTY_TERMINAL_CHARACTER);
+        full_indication.push(EMPTY_TERMINAL_CHARACTER());
         full_indication.append(&mut right_separator);
         let full_indication_len = full_indication_text.width() + 4; // 2 for separators 2 for padding
         let short_indication_text = "ME";
         let mut short_indication = vec![];
         short_indication.append(&mut left_separator);
-        short_indication.push(EMPTY_TERMINAL_CHARACTER);
+        short_indication.push(EMPTY_TERMINAL_CHARACTER());
         short_indication.append(&mut foreground_color(short_indication_text, self.color));
-        short_indication.push(EMPTY_TERMINAL_CHARACTER);
+        short_indication.push(EMPTY_TERMINAL_CHARACTER());
         short_indication.append(&mut right_separator);
         let short_indication_len = short_indication_text.width() + 4; // 2 for separators 2 for padding
         if full_indication_len <= max_length {
@@ -285,7 +285,7 @@ impl PaneFrame {
         for client_id in &self.other_focused_clients {
             let mut text = self.client_cursor(*client_id);
             full_indication_len += 2;
-            full_indication.push(EMPTY_TERMINAL_CHARACTER);
+            full_indication.push(EMPTY_TERMINAL_CHARACTER());
             full_indication.append(&mut text.clone());
             short_indication_len += 2;
             short_indication.append(&mut text);
@@ -294,18 +294,18 @@ impl PaneFrame {
             // 2 for separators, 2 for padding
             let mut ret = vec![];
             ret.append(&mut left_separator);
-            ret.push(EMPTY_TERMINAL_CHARACTER);
+            ret.push(EMPTY_TERMINAL_CHARACTER());
             ret.append(&mut full_indication);
-            ret.push(EMPTY_TERMINAL_CHARACTER);
+            ret.push(EMPTY_TERMINAL_CHARACTER());
             ret.append(&mut right_separator);
             Some((ret, full_indication_len + 4))
         } else if short_indication_len + 4 <= max_length {
             // 2 for separators, 2 for padding
             let mut ret = vec![];
             ret.append(&mut left_separator);
-            ret.push(EMPTY_TERMINAL_CHARACTER);
+            ret.push(EMPTY_TERMINAL_CHARACTER());
             ret.append(&mut short_indication);
-            ret.push(EMPTY_TERMINAL_CHARACTER);
+            ret.push(EMPTY_TERMINAL_CHARACTER());
             ret.append(&mut right_separator);
             Some((ret, short_indication_len + 4))
         } else {
@@ -333,40 +333,40 @@ impl PaneFrame {
         for client_id in &self.other_focused_clients {
             let mut text = self.client_cursor(*client_id);
             full_indication_len += 2;
-            full_indication.push(EMPTY_TERMINAL_CHARACTER);
+            full_indication.push(EMPTY_TERMINAL_CHARACTER());
             full_indication.append(&mut text.clone());
             middle_indication_len += 2;
-            middle_indication.push(EMPTY_TERMINAL_CHARACTER);
+            middle_indication.push(EMPTY_TERMINAL_CHARACTER());
             middle_indication.append(&mut text.clone());
             short_indication_len += 2;
-            short_indication.push(EMPTY_TERMINAL_CHARACTER);
+            short_indication.push(EMPTY_TERMINAL_CHARACTER());
             short_indication.append(&mut text);
         }
         if full_indication_len + 4 <= max_length {
             // 2 for separators, 2 for padding
             let mut ret = vec![];
             ret.append(&mut left_separator);
-            ret.push(EMPTY_TERMINAL_CHARACTER);
+            ret.push(EMPTY_TERMINAL_CHARACTER());
             ret.append(&mut full_indication);
-            ret.push(EMPTY_TERMINAL_CHARACTER);
+            ret.push(EMPTY_TERMINAL_CHARACTER());
             ret.append(&mut right_separator);
             Some((ret, full_indication_len + 4))
         } else if middle_indication_len + 4 <= max_length {
             // 2 for separators, 2 for padding
             let mut ret = vec![];
             ret.append(&mut left_separator);
-            ret.push(EMPTY_TERMINAL_CHARACTER);
+            ret.push(EMPTY_TERMINAL_CHARACTER());
             ret.append(&mut middle_indication);
-            ret.push(EMPTY_TERMINAL_CHARACTER);
+            ret.push(EMPTY_TERMINAL_CHARACTER());
             ret.append(&mut right_separator);
             Some((ret, middle_indication_len + 4))
         } else if short_indication_len + 3 <= max_length {
             // 2 for separators, 1 for padding
             let mut ret = vec![];
             ret.append(&mut left_separator);
-            ret.push(EMPTY_TERMINAL_CHARACTER);
+            ret.push(EMPTY_TERMINAL_CHARACTER());
             ret.append(&mut short_indication);
-            ret.push(EMPTY_TERMINAL_CHARACTER);
+            ret.push(EMPTY_TERMINAL_CHARACTER());
             ret.append(&mut right_separator);
             Some((ret, short_indication_len + 3))
         } else {

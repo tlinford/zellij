@@ -5066,6 +5066,7 @@ dependencies = [
  "sysinfo",
  "tempfile",
  "typetag",
+ "unicode-segmentation",
  "unicode-width 0.1.10",
  "url",
  "uuid",

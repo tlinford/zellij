@@ -12,11 +12,13 @@ use zellij_utils::input::command::RunCommand;
 
 use crate::panes::alacritty_functions::parse_sgr_color;
 
-pub const EMPTY_TERMINAL_CHARACTER: TerminalCharacter = TerminalCharacter {
-    character: ' ',
-    width: 1,
-    styles: RcCharacterStyles::Reset,
-};
+pub fn EMPTY_TERMINAL_CHARACTER() -> TerminalCharacter {
+    TerminalCharacter {
+        character: ' '.to_string(),
+        width: 1,
+        styles: RcCharacterStyles::Reset,
+    }
+}
 
 pub const RESET_STYLES: CharacterStyles = CharacterStyles {
     foreground: Some(AnsiCode::Reset),
@@ -922,36 +924,37 @@ impl Cursor {
 
 #[derive(Clone, PartialEq)]
 pub struct TerminalCharacter {
-    pub character: char,
+    pub character: String,
     pub styles: RcCharacterStyles,
     width: u8,
 }
 // This size has significant memory and CPU implications for long lines,
 // be careful about allowing it to grow
-const _: [(); 16] = [(); std::mem::size_of::<TerminalCharacter>()];
+const _: [(); 40] = [(); std::mem::size_of::<TerminalCharacter>()];
 
 impl TerminalCharacter {
     #[inline]
-    pub fn new(character: char) -> Self {
+    pub fn new(character: String) -> Self {
         Self::new_styled(character, Default::default())
     }
 
     #[inline]
-    pub fn new_styled(character: char, styles: RcCharacterStyles) -> Self {
+    pub fn new_styled(character: String, styles: RcCharacterStyles) -> Self {
+        let width = character.width() as u8;
         TerminalCharacter {
             character,
             styles,
-            width: character.width().unwrap_or(0) as u8,
+            width,
         }
     }
 
     #[inline]
-    pub fn new_singlewidth(character: char) -> Self {
+    pub fn new_singlewidth(character: String) -> Self {
         Self::new_singlewidth_styled(character, Default::default())
     }
 
     #[inline]
-    pub fn new_singlewidth_styled(character: char, styles: RcCharacterStyles) -> Self {
+    pub fn new_singlewidth_styled(character: String, styles: RcCharacterStyles) -> Self {
         TerminalCharacter {
             character,
             styles,

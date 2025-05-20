@@ -110,7 +110,7 @@ fn serialize_chunks_with_newlines(
             )
             .with_context(err_context)?;
             chunk_width += t_character.width();
-            vte_output.push(t_character.character);
+            vte_output.push_str(&t_character.character);
         }
     }
     Ok(vte_output)
@@ -149,7 +149,7 @@ fn serialize_chunks(
             )
             .with_context(err_context)?;
             chunk_width += t_character.width();
-            vte_output.push(t_character.character);
+            vte_output.push_str(&t_character.character);
         }
     }
     if let Some(sixel_image_store) = sixel_image_store {
@@ -845,8 +845,9 @@ impl CharacterChunk {
                     self.terminal_characters.insert(0, next_character); // put it back
                 } else if next_character.width() > 1 {
                     for _ in 1..next_character.width() {
-                        self.terminal_characters.insert(0, EMPTY_TERMINAL_CHARACTER);
-                        drained_part.push_back(EMPTY_TERMINAL_CHARACTER);
+                        self.terminal_characters
+                            .insert(0, EMPTY_TERMINAL_CHARACTER());
+                        drained_part.push_back(EMPTY_TERMINAL_CHARACTER());
                     }
                 }
                 break;
@@ -885,11 +886,11 @@ impl CharacterChunk {
             .drain(..absolute_middle_start_index)
             .collect();
         if pad_left_end_by > 0 {
-            characters_on_the_left.resize(pad_left_end_by, EMPTY_TERMINAL_CHARACTER);
+            characters_on_the_left.resize(pad_left_end_by, EMPTY_TERMINAL_CHARACTER());
         }
         if pad_right_start_by > 0 {
             for _ in 0..pad_right_start_by {
-                characters_on_the_right.insert(0, EMPTY_TERMINAL_CHARACTER);
+                characters_on_the_right.insert(0, EMPTY_TERMINAL_CHARACTER());
             }
         }
         Ok((characters_on_the_left, characters_on_the_right))
@@ -995,7 +996,7 @@ impl OutputBuffer {
         // pad row
         let row_width = row.width();
         if row_width < viewport_width {
-            let mut padding = vec![EMPTY_TERMINAL_CHARACTER; viewport_width - row_width];
+            let mut padding = vec![EMPTY_TERMINAL_CHARACTER(); viewport_width - row_width];
             terminal_characters.append(&mut padding);
         } else if row_width > viewport_width {
             let width_offset = row.excess_width_until(viewport_width);
@@ -1016,7 +1017,7 @@ impl OutputBuffer {
             // TODO: iterator?
             Some(row) => self.extract_characters_from_row(row, viewport_width),
             None => {
-                vec![EMPTY_TERMINAL_CHARACTER; viewport_width]
+                vec![EMPTY_TERMINAL_CHARACTER(); viewport_width]
             },
         }
     }
