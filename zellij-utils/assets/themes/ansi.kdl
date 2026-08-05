@@ -23,7 +23,7 @@ themes {
         }
         ribbon_unselected {
             base 0
-            background 7
+            background 8
             emphasis_0 1
             emphasis_1 15
             emphasis_2 4

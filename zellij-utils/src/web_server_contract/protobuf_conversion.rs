@@ -79,3 +79,45 @@ impl TryFrom<ProtoWebServerResponse> for WebServerResponse {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::web_server_commands::{InstructionForWebServer, WebServerResponse};
+
+    fn roundtrip_instruction(original: InstructionForWebServer) -> InstructionForWebServer {
+        let proto: ProtoInstructionForWebServer = original.into();
+        proto.try_into().expect("roundtrip ok")
+    }
+
+    fn roundtrip_response(original: WebServerResponse) -> WebServerResponse {
+        let proto: ProtoWebServerResponse = original.into();
+        proto.try_into().expect("roundtrip ok")
+    }
+
+    #[test]
+    fn query_version_roundtrip() {
+        use crate::web_server_contract::web_server_contract::instruction_for_web_server::Instruction;
+        let decoded = roundtrip_instruction(InstructionForWebServer::QueryVersion);
+        assert!(matches!(decoded, InstructionForWebServer::QueryVersion));
+
+        let proto: ProtoInstructionForWebServer = InstructionForWebServer::QueryVersion.into();
+        assert!(matches!(proto.instruction, Some(Instruction::QueryVersion(_))));
+    }
+
+    #[test]
+    fn version_response_roundtrip() {
+        let original = WebServerResponse::Version(VersionInfo {
+            version: "0.45.0".into(),
+            ip: "127.0.0.1".into(),
+            port: 8082,
+        });
+        match roundtrip_response(original) {
+            WebServerResponse::Version(info) => {
+                assert_eq!(info.version, "0.45.0");
+                assert_eq!(info.ip, "127.0.0.1");
+                assert_eq!(info.port, 8082);
+            },
+        }
+    }
+}

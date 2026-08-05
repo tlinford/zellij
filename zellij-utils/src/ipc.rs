@@ -189,6 +189,9 @@ pub enum ClientToServerMsg {
         terminal_size: Size,
         is_web_client: bool,
     },
+    AttachRelayWatcherClient {
+        is_web_client: bool,
+    },
     Action {
         action: Action,
         terminal_id: Option<u32>,
@@ -297,6 +300,10 @@ pub enum ServerToClientMsg {
     },
     MobileState {
         payload: MobileStatePayload,
+    },
+    SessionSize {
+        rows: u32,
+        cols: u32,
     },
 }
 

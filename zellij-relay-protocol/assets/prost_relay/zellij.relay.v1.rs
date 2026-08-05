@@ -1,0 +1,253 @@
+/// Tunnel handshake: sent by the Zellij instance as the first message on the
+/// control WebSocket.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TunnelAuth {
+    /// relay tunnel auth token (sharer → relay)
+    #[prost(string, tag="1")]
+    pub token: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub session_name: ::prost::alloc::string::String,
+    #[prost(uint32, tag="3")]
+    pub protocol_version: u32,
+    #[prost(string, tag="4")]
+    pub zellij_version: ::prost::alloc::string::String,
+    /// Phase 6 reconnect support: when reconnecting after an unexpected
+    /// drop, the client supplies the previously-issued slug so the relay
+    /// can reuse it if still free. Empty string on a fresh handshake. The
+    /// relay falls back to a freshly-generated slug if the requested one
+    /// is already occupied.
+    #[prost(string, tag="5")]
+    pub requested_slug: ::prost::alloc::string::String,
+    /// Role of the whole tunnel/slug. When true, the relay drops any
+    /// viewer-originated input frames on this tunnel (read-only slug). Role is
+    /// a per-slug property: a session that wants both read-only and read-write
+    /// viewers opens two tunnels.
+    #[prost(bool, tag="6")]
+    pub read_only: bool,
+}
+/// Relay response to a successful TunnelAuth.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TunnelEstablished {
+    #[prost(string, tag="1")]
+    pub public_url: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub slug: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub tunnel_id: ::prost::alloc::string::String,
+}
+/// Error surface on either the control or the terminal tunnel. `message` is a
+/// human-readable diagnostic only; receivers key off `code`. For
+/// PROTOCOL_VERSION_UNSUPPORTED the supported range and offered version are
+/// carried in the structured fields.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TunnelError {
+    #[prost(string, tag="1")]
+    pub message: ::prost::alloc::string::String,
+    #[prost(enumeration="TunnelErrorCode", tag="2")]
+    pub code: i32,
+    #[prost(uint32, tag="3")]
+    pub supported_min: u32,
+    #[prost(uint32, tag="4")]
+    pub supported_max: u32,
+    #[prost(uint32, tag="5")]
+    pub offered_version: u32,
+}
+/// Terminal tunnel linking message sent by the Zellij instance once the
+/// terminal WebSocket is opened for a previously-established tunnel.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TunnelReady {
+    #[prost(string, tag="1")]
+    pub tunnel_id: ::prost::alloc::string::String,
+    #[prost(string, tag="2")]
+    pub token: ::prost::alloc::string::String,
+}
+/// Relay → Zellij: a viewer has begun a SPAKE2 password-authenticated key
+/// exchange. `viewer_msg` is the viewer's opaque SPAKE2 message; the relay
+/// forwards it without inspection (it carries nothing derived from the secret
+/// that the relay could grind). `request_id` demultiplexes concurrent
+/// handshakes.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PakeChallenge {
+    #[prost(bytes="vec", tag="1")]
+    pub request_id: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes="vec", tag="2")]
+    pub viewer_msg: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes="vec", tag="3")]
+    pub link_id: ::prost::alloc::vec::Vec<u8>,
+}
+/// Zellij → Relay: the sharer's reply to a PakeChallenge. On `accepted`, the
+/// sharer allocates `client_id`, returns its own SPAKE2 message `sharer_msg`
+/// and a key-confirmation tag `sharer_confirm` over the transcript. `accepted`
+/// is false when the slug's credential is locked out or absent.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PakeResponse {
+    #[prost(bytes="vec", tag="1")]
+    pub request_id: ::prost::alloc::vec::Vec<u8>,
+    #[prost(uint32, tag="2")]
+    pub client_id: u32,
+    #[prost(bool, tag="3")]
+    pub accepted: bool,
+    #[prost(bytes="vec", tag="4")]
+    pub sharer_msg: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes="vec", tag="5")]
+    pub sharer_confirm: ::prost::alloc::vec::Vec<u8>,
+}
+/// Relay → Zellij: the viewer's key-confirmation tag, completing the second
+/// round-trip. The sharer verifies it to detect a wrong secret or a tampering
+/// relay before any data flows.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PakeConfirm {
+    #[prost(bytes="vec", tag="1")]
+    pub request_id: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes="vec", tag="2")]
+    pub viewer_confirm: ::prost::alloc::vec::Vec<u8>,
+}
+/// Zellij → Relay: final handshake outcome. On `accepted`, the sharer has
+/// verified the viewer's confirmation and spawned the per-viewer client; the
+/// relay finalises routing for `client_id`. On reject, the relay drops the
+/// viewer (uniform 401) and the sharer counts the failed attempt for lockout.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PakeResult {
+    #[prost(bytes="vec", tag="1")]
+    pub request_id: ::prost::alloc::vec::Vec<u8>,
+    #[prost(uint32, tag="2")]
+    pub client_id: u32,
+    #[prost(bool, tag="3")]
+    pub accepted: bool,
+}
+/// Relay → Zellij (or Zellij → Relay on server-initiated disconnect): the
+/// viewer is gone. After this frame, no additional frames for `client_id`
+/// will be generated.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ClientDisconnected {
+    #[prost(uint32, tag="1")]
+    pub client_id: u32,
+}
+/// Per-client control-plane payload (text WebSocket frames in the local
+/// web client's JSON control protocol). Dropped by the relay on a read-only
+/// tunnel.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ControlFrameData {
+    #[prost(uint32, tag="1")]
+    pub client_id: u32,
+    #[prost(bytes="vec", tag="2")]
+    pub data: ::prost::alloc::vec::Vec<u8>,
+}
+/// Per-client terminal-plane payload. Always ciphertext (`nonce || ciphertext`)
+/// under the per-viewer session key; the relay forwards it without decrypting.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TerminalFrameData {
+    #[prost(uint32, tag="1")]
+    pub client_id: u32,
+    #[prost(bytes="vec", tag="2")]
+    pub data: ::prost::alloc::vec::Vec<u8>,
+}
+/// Envelope for all control-tunnel messages.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ControlFrame {
+    #[prost(oneof="control_frame::Payload", tags="1, 2, 3, 4, 5, 6, 7, 8, 9")]
+    pub payload: ::core::option::Option<control_frame::Payload>,
+}
+/// Nested message and enum types in `ControlFrame`.
+pub mod control_frame {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Payload {
+        #[prost(message, tag="1")]
+        Auth(super::TunnelAuth),
+        #[prost(message, tag="2")]
+        Established(super::TunnelEstablished),
+        #[prost(message, tag="3")]
+        Error(super::TunnelError),
+        #[prost(message, tag="4")]
+        PakeChallenge(super::PakeChallenge),
+        #[prost(message, tag="5")]
+        PakeResponse(super::PakeResponse),
+        #[prost(message, tag="6")]
+        PakeConfirm(super::PakeConfirm),
+        #[prost(message, tag="7")]
+        PakeResult(super::PakeResult),
+        #[prost(message, tag="8")]
+        ClientDisconnected(super::ClientDisconnected),
+        #[prost(message, tag="9")]
+        ControlFrameData(super::ControlFrameData),
+    }
+}
+/// Envelope for all terminal-tunnel messages.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TerminalFrame {
+    #[prost(oneof="terminal_frame::Payload", tags="1, 2, 3")]
+    pub payload: ::core::option::Option<terminal_frame::Payload>,
+}
+/// Nested message and enum types in `TerminalFrame`.
+pub mod terminal_frame {
+    #[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Payload {
+        #[prost(message, tag="1")]
+        Ready(super::TunnelReady),
+        #[prost(message, tag="2")]
+        Error(super::TunnelError),
+        #[prost(message, tag="3")]
+        TerminalFrameData(super::TerminalFrameData),
+    }
+}
+/// Classification of a TunnelError so receivers branch on a typed code rather
+/// than substring-matching the human-readable `message`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum TunnelErrorCode {
+    TunnelErrorUnspecified = 0,
+    MalformedFrame = 1,
+    UnexpectedFrame = 2,
+    ProtocolVersionUnsupported = 3,
+    AuthRejected = 4,
+    MissingSlug = 5,
+    UnknownSlug = 6,
+    TunnelIdMismatch = 7,
+}
+impl TunnelErrorCode {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            TunnelErrorCode::TunnelErrorUnspecified => "TUNNEL_ERROR_UNSPECIFIED",
+            TunnelErrorCode::MalformedFrame => "MALFORMED_FRAME",
+            TunnelErrorCode::UnexpectedFrame => "UNEXPECTED_FRAME",
+            TunnelErrorCode::ProtocolVersionUnsupported => "PROTOCOL_VERSION_UNSUPPORTED",
+            TunnelErrorCode::AuthRejected => "AUTH_REJECTED",
+            TunnelErrorCode::MissingSlug => "MISSING_SLUG",
+            TunnelErrorCode::UnknownSlug => "UNKNOWN_SLUG",
+            TunnelErrorCode::TunnelIdMismatch => "TUNNEL_ID_MISMATCH",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "TUNNEL_ERROR_UNSPECIFIED" => Some(Self::TunnelErrorUnspecified),
+            "MALFORMED_FRAME" => Some(Self::MalformedFrame),
+            "UNEXPECTED_FRAME" => Some(Self::UnexpectedFrame),
+            "PROTOCOL_VERSION_UNSUPPORTED" => Some(Self::ProtocolVersionUnsupported),
+            "AUTH_REJECTED" => Some(Self::AuthRejected),
+            "MISSING_SLUG" => Some(Self::MissingSlug),
+            "UNKNOWN_SLUG" => Some(Self::UnknownSlug),
+            "TUNNEL_ID_MISMATCH" => Some(Self::TunnelIdMismatch),
+            _ => None,
+        }
+    }
+}

@@ -12,11 +12,10 @@ use zellij_utils::input::layout::Layout;
 use zellij_utils::{consts::VERSION, input::config::Config, input::options::Options};
 
 use crate::os_input_output::ClientOsApi;
-use crate::web_client::control_message::{
-    WebClientToWebServerControlMessage, WebClientToWebServerControlMessagePayload,
-};
 use crate::web_client::types::{SessionListResponse, WebSessionInfo};
-use crate::web_client::ClientOsApiFactory;
+use crate::web_client::SessionLinkFactory;
+use zellij_browser_bridge::protocol::{FromBrowser, ToBrowser, WebClientToWebServerControlMessagePayload};
+use zellij_browser_bridge::SessionLink;
 use zellij_utils::{
     data::{LayoutInfo, Palette},
     errors::ErrorContext,
@@ -417,14 +416,25 @@ mod web_client_tests {
 
         let (mut control_sink, mut control_stream) = control_ws.split();
 
-        let unsolicited = timeout(Duration::from_millis(500), control_stream.next()).await;
-        assert!(
-            unsolicited.is_err(),
-            "no control message may be pushed before the first render, got: {:?}",
-            unsolicited
-        );
+        let control_message = timeout(Duration::from_secs(2), control_stream.next())
+            .await
+            .expect("Timeout waiting for control message")
+            .expect("Control stream ended")
+            .expect("Error receiving control message");
 
-        let resize_msg = WebClientToWebServerControlMessage {
+        if let Message::Text(text) = control_message {
+            let parsed: ToBrowser =
+                serde_json::from_str(&text).expect("Failed to parse control message");
+
+            match parsed {
+                ToBrowser::SetConfig(_) => {},
+                _ => panic!("Expected SetConfig message, got: {:?}", parsed),
+            }
+        } else {
+            panic!("Expected text message, got: {:?}", control_message);
+        }
+
+        let resize_msg = FromBrowser {
             web_client_id: web_client_id.clone(),
             payload: WebClientToWebServerControlMessagePayload::TerminalResize(Size {
                 rows: 30,
@@ -505,6 +515,12 @@ mod web_client_tests {
     #[tokio::test]
     #[serial]
     async fn test_terminal_metrics_translates_to_pixel_dimensions() {
+        // Simulates a browser sending a TerminalMetrics control message
+        // (the payload our websockets.js sendTerminalMetrics() helper
+        // produces) and verifies the web server translates it into
+        // ClientToServerMsg::TerminalPixelDimensions with field-for-field
+        // accuracy. This guards the wire-format contract end-to-end
+        // through serde + the match arm in websocket_handlers.rs.
         let _ = delete_db();
 
         let test_token_name = "test_token_terminal_metrics";
@@ -610,7 +626,10 @@ mod web_client_tests {
         .expect("Failed to connect to control WebSocket");
         let (mut control_sink, _control_stream) = control_ws.split();
 
-        let resize_msg = WebClientToWebServerControlMessage {
+        // The control channel only registers the client_id after the
+        // first inbound message. Send a TerminalResize first to mirror
+        // what the browser does at startup, then the TerminalMetrics.
+        let resize_msg = FromBrowser {
             web_client_id: web_client_id.clone(),
             payload: WebClientToWebServerControlMessagePayload::TerminalResize(Size {
                 rows: 24,
@@ -624,6 +643,11 @@ mod web_client_tests {
             .await
             .expect("Failed to send TerminalResize");
 
+        // Send the actual TerminalMetrics payload — this is what the
+        // browser-side sendTerminalMetrics() helper writes onto the wire.
+        // Hand-construct the JSON to lock in the exact field names the
+        // browser uses, rather than going through the serde Serialize
+        // impl (which would mask any rename mismatch).
         let metrics_json = serde_json::json!({
             "web_client_id": web_client_id,
             "payload": {
@@ -639,8 +663,11 @@ mod web_client_tests {
             .await
             .expect("Failed to send TerminalMetrics");
 
+        // Give the server a moment to process both messages.
         tokio::time::sleep(Duration::from_millis(500)).await;
 
+        // Inspect the captured ClientToServerMsg traffic on the mock OS
+        // API for this web client.
         let mock_apis = factory_for_verification.mock_apis.lock().unwrap();
         let mut found_pixel_dims: Option<ClientToServerMsg> = None;
         for (_, mock_api) in mock_apis.iter() {
@@ -842,7 +869,11 @@ mod web_client_tests {
 
         let (mut control_sink, mut control_stream) = control_ws.split();
 
-        let resize_msg = WebClientToWebServerControlMessage {
+        let _initial_msg = timeout(Duration::from_secs(2), control_stream.next())
+            .await
+            .expect("Timeout waiting for initial control message");
+
+        let resize_msg = FromBrowser {
             web_client_id: web_client_id.clone(),
             payload: WebClientToWebServerControlMessagePayload::TerminalResize(Size {
                 rows: 30,
@@ -995,7 +1026,7 @@ mod web_client_tests {
 
         let (mut control_sink_2, _control_stream_2) = control_ws_2.split();
 
-        let resize_msg_1 = WebClientToWebServerControlMessage {
+        let resize_msg_1 = FromBrowser {
             web_client_id: client_id_1.clone(),
             payload: WebClientToWebServerControlMessagePayload::TerminalResize(Size {
                 rows: 30,
@@ -1003,7 +1034,7 @@ mod web_client_tests {
             }),
         };
 
-        let resize_msg_2 = WebClientToWebServerControlMessage {
+        let resize_msg_2 = FromBrowser {
             web_client_id: client_id_2.clone(),
             payload: WebClientToWebServerControlMessagePayload::TerminalResize(Size {
                 rows: 25,
@@ -1050,7 +1081,7 @@ mod web_client_tests {
 
         tokio::time::sleep(Duration::from_millis(500)).await;
 
-        let resize_msg_2_again = WebClientToWebServerControlMessage {
+        let resize_msg_2_again = FromBrowser {
             web_client_id: client_id_2.clone(),
             payload: WebClientToWebServerControlMessagePayload::TerminalResize(Size {
                 rows: 40,
@@ -1959,7 +1990,8 @@ mod web_client_tests {
 
         let (mut control_sink, mut control_stream) = control_ws.split();
 
-        let resize_msg = WebClientToWebServerControlMessage {
+        let _initial_msg = timeout(Duration::from_secs(2), control_stream.next()).await;
+        let resize_msg = FromBrowser {
             web_client_id: web_client_id.clone(),
             payload: WebClientToWebServerControlMessagePayload::TerminalResize(Size {
                 rows: 30,
@@ -2134,9 +2166,10 @@ mod web_client_tests {
         .expect("Control WebSocket connection timed out")
         .expect("Failed to connect to control WebSocket");
 
-        let (mut control_sink, _control_stream) = control_ws.split();
+        let (mut control_sink, mut control_stream) = control_ws.split();
 
-        let resize_msg = WebClientToWebServerControlMessage {
+        let _initial_msg = timeout(Duration::from_secs(2), control_stream.next()).await;
+        let resize_msg = FromBrowser {
             web_client_id: web_client_id.clone(),
             payload: WebClientToWebServerControlMessagePayload::TerminalResize(Size {
                 rows: 30,
@@ -2545,7 +2578,7 @@ mod web_client_tests {
 
         let (mut control_sink, _control_stream) = control_ws.split();
 
-        let resize_msg = WebClientToWebServerControlMessage {
+        let resize_msg = FromBrowser {
             web_client_id: web_client_id.clone(),
             payload: WebClientToWebServerControlMessagePayload::TerminalResize(Size {
                 rows: 30,
@@ -3285,7 +3318,7 @@ impl MockSessionManager {
 }
 
 #[cfg(test)]
-impl SessionManager for MockSessionManager {
+impl SessionSource for MockSessionManager {
     fn session_exists(&self, session_name: &str) -> Result<bool, Box<dyn std::error::Error>> {
         if self.all_sessions_exist {
             Ok(true)
@@ -3309,7 +3342,7 @@ impl SessionManager for MockSessionManager {
     fn spawn_session_if_needed(
         &self,
         session_name: &str,
-        _os_input: Box<dyn ClientOsApi>,
+        _os_input: Box<dyn SessionLink>,
         session_exists: bool,
         _zellij_ipc_pipe: &PathBuf,
         first_message: ClientToServerMsg,
@@ -3341,8 +3374,8 @@ impl MockClientOsApiFactory {
     }
 }
 
-impl ClientOsApiFactory for MockClientOsApiFactory {
-    fn create_client_os_api(&self) -> Result<Box<dyn ClientOsApi>, Box<dyn std::error::Error>> {
+impl SessionLinkFactory for MockClientOsApiFactory {
+    fn create(&self) -> Result<Box<dyn SessionLink>, Box<dyn std::error::Error>> {
         let mock_api = Arc::new(MockClientOsApi::new());
 
         let client_id = uuid::Uuid::new_v4().to_string();
@@ -3430,5 +3463,32 @@ impl ClientOsApi for MockClientOsApi {
     }
     fn disable_mouse(&self) -> anyhow::Result<()> {
         Ok(())
+    }
+}
+
+impl SessionLink for MockClientOsApi {
+    fn send_to_server(&self, msg: ClientToServerMsg) {
+        self.messages_to_server.lock().unwrap().push(msg);
+    }
+    fn recv_from_server(&self) -> Option<(ServerToClientMsg, ErrorContext)> {
+        let msg = self.messages_from_server.lock().unwrap().pop_front();
+        if msg.is_none() {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        msg
+    }
+    fn connect_to_server(&self, _path: &std::path::Path) {}
+    fn get_terminal_size(&self) -> Size {
+        self.terminal_size
+    }
+    fn load_palette(&self) -> Palette {
+        Palette::default()
+    }
+    fn update_session_name(&mut self, _new_session_name: String) {}
+    fn spawn_server(&self, _socket_path: &std::path::Path, _debug: bool) -> Result<(), std::io::Error> {
+        Ok(())
+    }
+    fn box_clone(&self) -> Box<dyn SessionLink> {
+        Box::new(self.clone())
     }
 }

@@ -196,3 +196,23 @@ jobs:
 
       - name: Check Format
         run: cargo xtask format --check
+
+  js-tests:
+    name: Web Client JS Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: web-client-tests/.nvmrc
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: web-client-tests
+
+      - name: Run tests
+        run: npm test
+        working-directory: web-client-tests

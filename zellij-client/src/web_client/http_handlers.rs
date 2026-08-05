@@ -1,10 +1,10 @@
-use crate::web_client::authentication::{IsReadOnly, SessionTokenHash};
-use crate::web_client::control_message::SetConfigPayload;
+use crate::web_client::authentication::{AuthTokenHash, IsReadOnly, SessionTokenHash};
 use crate::web_client::types::{
     record_pending_welcome_session, AppState, CreateClientIdResponse, LoginRequest, LoginResponse,
-    SessionListResponse, SessionQuery,
+    SessionListResponse, SessionQuery, ViewerId,
 };
-use crate::web_client::utils::get_mime_type;
+use crate::web_client::utils::parse_cookies;
+use zellij_browser_bridge::protocol::DisplayConfig;
 use axum::{
     extract::{Path as AxumPath, Query, State},
     http::{header, StatusCode},
@@ -12,28 +12,54 @@ use axum::{
     Json,
 };
 use axum_extra::extract::cookie::{Cookie, SameSite};
-use include_dir;
 use uuid::Uuid;
+use zellij_relay_protocol::crypto;
 use zellij_utils::{
     consts::VERSION, sessions::generate_unique_session_name,
     web_authentication_tokens::create_session_token,
 };
 
-const ASSETS_DIR: include_dir::Dir<'_> = include_dir::include_dir!("$CARGO_MANIFEST_DIR/assets");
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#x27;")
+}
+pub async fn serve_html(State(state): State<AppState>, request: Request) -> Html<String> {
+    let cookies = parse_cookies(&request);
+    let is_authenticated = cookies.get("session_token").is_some();
+    let auth_value = if is_authenticated { "true" } else { "false" };
+    let base_url = html_escape(
+        &state
+            .config
+            .lock()
+            .unwrap()
+            .web_client
+            .base_url
+            .clone()
+            .unwrap_or("/".to_string()),
+    );
+    let expected_e2e = if state.encrypt_web_sharing {
+        "true"
+    } else {
+        "false"
+    };
 
-pub async fn serve_html() -> impl IntoResponse {
-    match ASSETS_DIR.get_file("index.html") {
-        Some(file) => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/html")],
-            file.contents(),
-        ),
-        None => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [(header::CONTENT_TYPE, "text/plain")],
-            "index.html missing".as_bytes(),
-        ),
-    }
+    // Local web clients are not relay-fan-out viewers, so the clipper is
+    // never instantiated. Stamp sentinels; the /session JSON is
+    // authoritative.
+    let html = Html(
+        zellij_web_client_assets::INDEX_HTML
+            .replace("IS_AUTHENTICATED", &format!("{}", auth_value))
+            .replace("EXPECTED_E2E", expected_e2e)
+            .replace("IS_READ_ONLY", "false")
+            .replace("SESSION_ROWS", "0")
+            .replace("SESSION_COLS", "0")
+            .replace("AUTH_MODE", "local")
+            .replace("BASE_URL", &base_url),
+    );
+    html
 }
 
 pub async fn login_handler(
@@ -108,6 +134,7 @@ pub async fn create_new_client(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json("Missing session info".to_string()),
         ))?;
+    let auth_token_hash = request.extensions().get::<AuthTokenHash>().cloned();
 
     let session_name = match params.session.filter(|name| !name.is_empty()) {
         Some(session_name) => session_name,
@@ -124,47 +151,70 @@ pub async fn create_new_client(
     };
 
     let web_client_id = String::from(Uuid::new_v4());
-    let os_input = state
+    let viewer_id = ViewerId(web_client_id.clone());
+    let link = state
         .client_os_api_factory
-        .create_client_os_api()
+        .create()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(e.to_string())))?;
 
-    state.connection_table.lock().unwrap().add_new_client(
-        web_client_id.to_owned(),
-        os_input,
-        is_read_only,
-        session_token_hash.0,
-    );
+    state
+        .bridge
+        .admit(viewer_id.clone(), link, is_read_only, session_token_hash.0);
 
-    let config = SetConfigPayload::from(&*state.config.lock().unwrap());
+    // Derive + stash the per-client E2E key when the opt-in is on. Missing
+    // `auth_token_hash` here means the auth middleware could not look it
+    // up (DB miss); fall back to plaintext rather than reject the session.
+    let e2e_encrypted = if state.encrypt_web_sharing {
+        match auth_token_hash {
+            Some(h) => {
+                let key = crypto::derive_key(&h.0, &state.local_tunnel_id);
+                state
+                    .e2e_keys
+                    .lock()
+                    .unwrap()
+                    .insert(viewer_id.clone(), key);
+                true
+            },
+            None => {
+                log::warn!(
+                    "encrypt_web_sharing enabled but no auth_token_hash for client {} — falling back to plaintext",
+                    web_client_id
+                );
+                false
+            },
+        }
+    } else {
+        false
+    };
+
+    let config = DisplayConfig::from(&*state.config.lock().unwrap());
 
     Ok(Json(CreateClientIdResponse {
         web_client_id,
         is_read_only,
         session_name,
         config,
+        e2e_encrypted,
+        tunnel_id: state.local_tunnel_id.clone(),
     }))
 }
 
 pub async fn list_sessions_handler(State(state): State<AppState>) -> Json<SessionListResponse> {
-    let mut sessions = state.session_manager.list_sessions();
+    let mut sessions = state.bridge.source().list_sessions();
     sessions.sort_by(|a, b| a.name.cmp(&b.name));
     Json(SessionListResponse { sessions })
 }
 
 pub async fn get_static_asset(AxumPath(path): AxumPath<String>) -> impl IntoResponse {
-    let path = path.trim_start_matches('/');
-
-    match ASSETS_DIR.get_file(path) {
+    match zellij_web_client_assets::lookup(&path) {
         None => (
             [(header::CONTENT_TYPE, "text/html")],
             "Not Found".as_bytes(),
         ),
-        Some(file) => {
-            let ext = file.path().extension().and_then(|ext| ext.to_str());
-            let mime_type = get_mime_type(ext);
-            ([(header::CONTENT_TYPE, mime_type)], file.contents())
-        },
+        Some(asset) => (
+            [(header::CONTENT_TYPE, asset.content_type)],
+            asset.contents,
+        ),
     }
 }
 

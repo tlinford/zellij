@@ -46,7 +46,7 @@ use zellij_utils::ipc::{ClientToServerMsg, IpcSenderWithContext};
 use zellij_utils::sessions::generate_random_name as generate_random_name_impl;
 #[cfg(feature = "web_server_capability")]
 use zellij_utils::web_authentication_tokens::{
-    create_token, list_tokens, rename_token, revoke_all_tokens, revoke_token,
+    create_token, list_tokens, rename_token, revoke_all_tokens, revoke_token_and_return_hash,
 };
 #[cfg(feature = "web_server_capability")]
 use zellij_utils::web_server_commands::shutdown_all_webserver_instances;
@@ -683,6 +683,44 @@ fn host_run_plugin_command(mut caller: Caller<'_, PluginEnv>) {
                     PluginCommand::QueryWebServerStatus => query_web_server_status(env),
                     PluginCommand::ShareCurrentSession => share_current_session(env),
                     PluginCommand::StopSharingCurrentSession => stop_sharing_current_session(env),
+                    PluginCommand::ShareCurrentSessionToRelay => {
+                        share_current_session_to_relay(env)
+                    },
+                    PluginCommand::StopSharingCurrentSessionFromRelay => {
+                        stop_sharing_current_session_from_relay(env)
+                    },
+                    PluginCommand::SetRelayTunnelAuthToken(token) => {
+                        set_relay_tunnel_auth_token(env, token);
+                    },
+                    PluginCommand::RelayMintGuestLink {
+                        read_only,
+                        label,
+                        enroll,
+                    } => {
+                        relay_mint_guest_link(env, read_only, label, enroll);
+                    },
+                    PluginCommand::RelayRevokeGuestLink { link_id } => {
+                        relay_revoke_guest_link(env, link_id);
+                    },
+                    PluginCommand::RelayListGuestLinks => {
+                        relay_list_guest_links(env);
+                    },
+                    PluginCommand::RelayListPendingAdmissions => {
+                        relay_list_pending_admissions(env);
+                    },
+                    PluginCommand::RelayResolveAdmission {
+                        client_id,
+                        admit,
+                        code_confirmed,
+                    } => {
+                        relay_resolve_admission(env, client_id, admit, code_confirmed);
+                    },
+                    PluginCommand::RelayListDevices => {
+                        relay_list_devices(env);
+                    },
+                    PluginCommand::RelayRevokeDevice { device_id } => {
+                        relay_revoke_device(env, device_id);
+                    },
                     PluginCommand::SetSelfMouseSelectionSupport(selection_support) => {
                         set_self_mouse_selection_support(env, selection_support);
                     },
@@ -5088,6 +5126,29 @@ fn stop_sharing_current_session(env: &PluginEnv) {
         .send_to_server(ServerInstruction::StopSharingCurrentSession(env.client_id));
 }
 
+fn share_current_session_to_relay(env: &PluginEnv) {
+    let _ = env
+        .senders
+        .send_to_server(ServerInstruction::ShareCurrentSessionToRelay(env.client_id));
+}
+
+fn stop_sharing_current_session_from_relay(env: &PluginEnv) {
+    let _ = env
+        .senders
+        .send_to_server(ServerInstruction::StopSharingCurrentSessionFromRelay(
+            env.client_id,
+        ));
+}
+
+fn set_relay_tunnel_auth_token(env: &PluginEnv, token: String) {
+    let _ = env
+        .senders
+        .send_to_server(ServerInstruction::SetRelayTunnelAuthToken(
+            env.client_id,
+            token,
+        ));
+}
+
 fn group_and_ungroup_panes(
     env: &PluginEnv,
     panes_to_group: Vec<PaneId>,
@@ -5150,6 +5211,204 @@ fn embed_multiple_panes(env: &PluginEnv, pane_ids: Vec<PaneId>) {
 }
 
 #[cfg(feature = "web_server_capability")]
+fn relay_mint_guest_link(env: &PluginEnv, read_only: bool, label: String, enroll: bool) {
+    use zellij_utils::plugin_api::plugin_command::{
+        RelayGuestLinkInfo as ProtobufRelayGuestLinkInfo, RelayMintGuestLinkResponse,
+    };
+    let response = match zellij_relay_client::guest_links::mint(read_only, label, enroll) {
+        Ok(link) => RelayMintGuestLinkResponse {
+            link: Some(ProtobufRelayGuestLinkInfo {
+                link_id: link.link_id,
+                label: link.label,
+                read_only: link.read_only,
+                enroll,
+                url: link.url,
+                spent: link.spent,
+                active: false,
+            }),
+            error: None,
+        },
+        Err(e) => RelayMintGuestLinkResponse {
+            link: None,
+            error: Some(e),
+        },
+    };
+    let _ = wasi_write_object(env, &response.encode_to_vec());
+}
+
+#[cfg(not(feature = "web_server_capability"))]
+fn relay_mint_guest_link(env: &PluginEnv, _read_only: bool, _label: String, _enroll: bool) {
+    log::error!("This version of Zellij was compiled without the web server capabilities!");
+    let empty_vec: Vec<&str> = vec![];
+    let _ = wasi_write_object(env, &empty_vec);
+}
+
+#[cfg(feature = "web_server_capability")]
+fn relay_revoke_guest_link(env: &PluginEnv, link_id: Vec<u8>) {
+    use zellij_utils::plugin_api::plugin_command::RelayRevokeGuestLinkResponse;
+    let revoked = zellij_relay_client::guest_links::revoke(&link_id);
+    let response = RelayRevokeGuestLinkResponse {
+        revoked,
+        error: if revoked {
+            None
+        } else {
+            Some("guest link not found".to_string())
+        },
+    };
+    let _ = wasi_write_object(env, &response.encode_to_vec());
+}
+
+#[cfg(not(feature = "web_server_capability"))]
+fn relay_revoke_guest_link(env: &PluginEnv, _link_id: Vec<u8>) {
+    log::error!("This version of Zellij was compiled without the web server capabilities!");
+    let empty_vec: Vec<&str> = vec![];
+    let _ = wasi_write_object(env, &empty_vec);
+}
+
+#[cfg(feature = "web_server_capability")]
+fn relay_list_guest_links(env: &PluginEnv) {
+    use zellij_utils::plugin_api::plugin_command::{
+        RelayGuestLinkInfo as ProtobufRelayGuestLinkInfo, RelayListGuestLinksResponse,
+    };
+    let links = zellij_relay_client::guest_links::list()
+        .into_iter()
+        .map(|l| ProtobufRelayGuestLinkInfo {
+            link_id: l.link_id,
+            label: l.label,
+            read_only: l.read_only,
+            enroll: l.enroll,
+            url: l.url,
+            spent: l.spent,
+            active: l.active,
+        })
+        .collect();
+    let response = RelayListGuestLinksResponse { links, error: None };
+    let _ = wasi_write_object(env, &response.encode_to_vec());
+}
+
+#[cfg(not(feature = "web_server_capability"))]
+fn relay_list_guest_links(env: &PluginEnv) {
+    log::error!("This version of Zellij was compiled without the web server capabilities!");
+    let empty_vec: Vec<&str> = vec![];
+    let _ = wasi_write_object(env, &empty_vec);
+}
+
+#[cfg(feature = "web_server_capability")]
+fn relay_list_pending_admissions(env: &PluginEnv) {
+    use zellij_utils::plugin_api::plugin_command::{
+        RelayListPendingAdmissionsResponse,
+        RelayPendingAdmissionInfo as ProtobufRelayPendingAdmissionInfo,
+    };
+    let admissions = zellij_relay_client::admissions::list()
+        .into_iter()
+        .map(|a| ProtobufRelayPendingAdmissionInfo {
+            client_id: a.client_id,
+            sas: a.sas,
+            label: a.label,
+            read_only: a.read_only,
+            claimed_name: a.claimed_name,
+            contested: a.contested,
+            seconds_remaining: a.seconds_remaining as u32,
+        })
+        .collect();
+    let response = RelayListPendingAdmissionsResponse {
+        admissions,
+        error: None,
+    };
+    let _ = wasi_write_object(env, &response.encode_to_vec());
+}
+
+#[cfg(not(feature = "web_server_capability"))]
+fn relay_list_pending_admissions(env: &PluginEnv) {
+    log::error!("This version of Zellij was compiled without the web server capabilities!");
+    let empty_vec: Vec<&str> = vec![];
+    let _ = wasi_write_object(env, &empty_vec);
+}
+
+#[cfg(feature = "web_server_capability")]
+fn relay_resolve_admission(env: &PluginEnv, client_id: u32, admit: bool, code_confirmed: bool) {
+    use zellij_utils::plugin_api::plugin_command::RelayResolveAdmissionResponse;
+    let response = match zellij_relay_client::admissions::resolve(client_id, admit, code_confirmed) {
+        Ok(()) => RelayResolveAdmissionResponse {
+            resolved: true,
+            error: None,
+        },
+        Err(e) => RelayResolveAdmissionResponse {
+            resolved: false,
+            error: Some(e),
+        },
+    };
+    let _ = wasi_write_object(env, &response.encode_to_vec());
+}
+
+#[cfg(not(feature = "web_server_capability"))]
+fn relay_resolve_admission(env: &PluginEnv, _client_id: u32, _admit: bool, _code_confirmed: bool) {
+    log::error!("This version of Zellij was compiled without the web server capabilities!");
+    let empty_vec: Vec<&str> = vec![];
+    let _ = wasi_write_object(env, &empty_vec);
+}
+
+#[cfg(feature = "web_server_capability")]
+fn relay_list_devices(env: &PluginEnv) {
+    use zellij_utils::data::{DeviceScope, DeviceStorageLevel};
+    use zellij_utils::plugin_api::generated_api::api::plugin_command::{
+        DeviceScope as ProtobufDeviceScope, DeviceStorageLevel as ProtobufDeviceStorageLevel,
+    };
+    use zellij_utils::plugin_api::plugin_command::{
+        RelayDeviceInfo as ProtobufRelayDeviceInfo, RelayListDevicesResponse,
+    };
+    let devices = zellij_relay_client::device_roster::list()
+        .into_iter()
+        .map(|d| ProtobufRelayDeviceInfo {
+            device_id: d.device_id,
+            label: d.label,
+            read_only: d.read_only,
+            scope: match d.scope {
+                DeviceScope::Session => ProtobufDeviceScope::Session as i32,
+                DeviceScope::Host => ProtobufDeviceScope::Host as i32,
+            },
+            last_used: d.last_used,
+            storage_level: match d.storage_level {
+                DeviceStorageLevel::FilePermsOnly => {
+                    ProtobufDeviceStorageLevel::FilePermsOnly as i32
+                },
+            },
+            connected: d.connected,
+        })
+        .collect();
+    let response = RelayListDevicesResponse {
+        devices,
+        error: None,
+    };
+    let _ = wasi_write_object(env, &response.encode_to_vec());
+}
+
+#[cfg(not(feature = "web_server_capability"))]
+fn relay_list_devices(env: &PluginEnv) {
+    log::error!("This version of Zellij was compiled without the web server capabilities!");
+    let empty_vec: Vec<&str> = vec![];
+    let _ = wasi_write_object(env, &empty_vec);
+}
+
+#[cfg(feature = "web_server_capability")]
+fn relay_revoke_device(env: &PluginEnv, device_id: Vec<u8>) {
+    use zellij_utils::plugin_api::plugin_command::RelayRevokeDeviceResponse;
+    let revoked = zellij_relay_client::device_roster::revoke(&device_id);
+    let response = RelayRevokeDeviceResponse {
+        revoked,
+        error: None,
+    };
+    let _ = wasi_write_object(env, &response.encode_to_vec());
+}
+
+#[cfg(not(feature = "web_server_capability"))]
+fn relay_revoke_device(env: &PluginEnv, _device_id: Vec<u8>) {
+    log::error!("This version of Zellij was compiled without the web server capabilities!");
+    let empty_vec: Vec<&str> = vec![];
+    let _ = wasi_write_object(env, &empty_vec);
+}
+
+#[cfg(feature = "web_server_capability")]
 fn generate_web_login_token(env: &PluginEnv, token_label: Option<String>, read_only: bool) {
     let serialized = match create_token(token_label, read_only) {
         Ok((token, token_label)) => CreateTokenResponse {
@@ -5175,12 +5434,14 @@ fn generate_web_login_token(env: &PluginEnv, _token_label: Option<String>, _read
 
 #[cfg(feature = "web_server_capability")]
 fn revoke_web_login_token(env: &PluginEnv, token_label: String) {
-    let serialized = match revoke_token(&token_label) {
-        Ok(true) => RevokeTokenResponse {
-            successfully_revoked: true,
-            error: None,
+    let serialized = match revoke_token_and_return_hash(&token_label) {
+        Ok(Some(_token_hash)) => {
+            RevokeTokenResponse {
+                successfully_revoked: true,
+                error: None,
+            }
         },
-        Ok(false) => RevokeTokenResponse {
+        Ok(None) => RevokeTokenResponse {
             successfully_revoked: false,
             error: Some(format!("Token with label {} not found", token_label)),
         },
@@ -5604,6 +5865,16 @@ fn check_command_permission(
         },
         PluginCommand::ShareCurrentSession
         | PluginCommand::StopSharingCurrentSession
+        | PluginCommand::ShareCurrentSessionToRelay
+        | PluginCommand::StopSharingCurrentSessionFromRelay
+        | PluginCommand::SetRelayTunnelAuthToken(..)
+        | PluginCommand::RelayMintGuestLink { .. }
+        | PluginCommand::RelayRevokeGuestLink { .. }
+        | PluginCommand::RelayListGuestLinks
+        | PluginCommand::RelayListPendingAdmissions
+        | PluginCommand::RelayResolveAdmission { .. }
+        | PluginCommand::RelayListDevices
+        | PluginCommand::RelayRevokeDevice { .. }
         | PluginCommand::StopWebServer
         | PluginCommand::QueryWebServerStatus
         | PluginCommand::GenerateWebLoginToken(..)

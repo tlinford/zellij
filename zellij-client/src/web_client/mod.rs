@@ -1,13 +1,8 @@
-pub mod control_message;
-
 pub(crate) mod authentication;
-mod connection_manager;
-mod host_query_seed;
 mod http_handlers;
 mod ipc_listener;
+mod local_heartbeat;
 mod message_handlers;
-mod server_listener;
-mod session_management;
 mod types;
 mod utils;
 mod websocket_handlers;
@@ -50,8 +45,8 @@ use http_handlers::{
 use ipc_listener::listen_to_web_server_instructions;
 
 use types::{
-    AppState, ClientOsApiFactory, ConnectionTable, RealClientOsApiFactory, RealSessionManager,
-    SessionManager,
+    AppState, BrowserBridge, RealClientOsApiFactory, SessionLinkFactory, LocalSessionSource,
+    SessionSource,
 };
 use utils::should_use_https;
 use uuid::Uuid;
@@ -182,8 +177,8 @@ pub async fn serve_web_client(
     config_file_path: Option<PathBuf>,
     listener: std::net::TcpListener,
     rustls_config: Option<RustlsConfig>,
-    session_manager: Option<Arc<dyn SessionManager>>,
-    client_os_api_factory: Option<Arc<dyn ClientOsApiFactory>>,
+    session_manager: Option<Arc<dyn SessionSource>>,
+    client_os_api_factory: Option<Arc<dyn SessionLinkFactory>>,
     web_server_ip: IpAddr,
     web_server_port: u16,
 ) {
@@ -192,9 +187,9 @@ pub async fn serve_web_client(
         log::error!("Failed to find default config file path");
         return;
     };
-    let connection_table = Arc::new(Mutex::new(ConnectionTable::default()));
     let server_handle = Handle::new();
-    let session_manager = session_manager.unwrap_or_else(|| Arc::new(RealSessionManager));
+    let session_source = session_manager.unwrap_or_else(|| Arc::new(LocalSessionSource));
+    let bridge = BrowserBridge::new(session_source);
     let client_os_api_factory =
         client_os_api_factory.unwrap_or_else(|| Arc::new(RealClientOsApiFactory));
 
@@ -209,15 +204,19 @@ pub async fn serve_web_client(
         .collect();
 
     let is_https = rustls_config.is_some();
+    let encrypt_web_sharing = config_options.encrypt_web_sharing.unwrap_or(false);
+    let local_tunnel_id = Uuid::new_v4().to_string();
     let state = AppState {
-        connection_table: connection_table.clone(),
+        bridge,
         config: Arc::new(Mutex::new(config)),
-        config_options,
-        config_file_path,
-        session_manager,
-        client_os_api_factory,
+        config_options: config_options.clone(),
+        config_file_path: config_file_path.clone(),
+        client_os_api_factory: client_os_api_factory.clone(),
+        e2e_keys: Arc::new(Mutex::new(std::collections::HashMap::new())),
         is_https,
         pending_welcome_sessions: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+        encrypt_web_sharing,
+        local_tunnel_id,
     };
 
     tokio::spawn({

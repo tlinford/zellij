@@ -12,9 +12,6 @@ pub mod instruction_for_web_server {
     pub enum Instruction {
         #[prost(message, tag="1")]
         ShutdownWebServer(super::ShutdownWebServerMsg),
-        /// Future commands can be added here
-        /// RestartWebServerMsg restart_web_server = 3;
-        /// ReloadConfigMsg reload_config = 4;
         #[prost(message, tag="2")]
         QueryVersion(super::QueryVersionMsg),
     }

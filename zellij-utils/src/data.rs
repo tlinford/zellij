@@ -1490,7 +1490,7 @@ pub const DEFAULT_STYLES: Styling = Styling {
         background: PaletteColor::EightBit(default_colors::GRAY),
     },
     exit_code_error: StyleDeclaration {
-        base: PaletteColor::EightBit(default_colors::RED),
+        base: PaletteColor::EightBit(default_colors::RED_ERROR),
         emphasis_0: PaletteColor::EightBit(default_colors::YELLOW),
         emphasis_1: PaletteColor::EightBit(default_colors::GOLD),
         emphasis_2: PaletteColor::EightBit(default_colors::SILVER),
@@ -1757,6 +1757,46 @@ pub struct ModeInfo {
     pub nested_ascend_keys: Vec<KeyWithModifier>,
     pub session_ascended: Option<bool>,
     pub nested_descend_keys: Vec<KeyWithModifier>,
+    /// Structured status of the active remote relay tunnel, if any. Set when the
+    /// user has triggered "Share to Internet"; cleared (`None`) when no tunnel is
+    /// active.
+    pub relay_share_status: Option<RelayShareStatus>,
+}
+
+/// Connection status of the relay tunnel surfaced to the `share` plugin through
+/// `ModeInfo`. Replaces the earlier `Option<String>` sentinel protocol.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RelayShareStatus {
+    /// The share is live. `url` is the tunnel's public URL, or `None` if the
+    /// tunnel is established but has not yet reported a URL.
+    Connected { url: Option<String> },
+    /// The tunnel dropped and the supervisor is retrying. `attempt` carries the
+    /// consecutive-reconnect counter as rendered to the operator.
+    Reconnecting { attempt: u32 },
+    /// The primary tunnel failed terminally. `reason` is the typed cause the
+    /// plugin branches on; `message` is a human-readable diagnostic for display.
+    Failed {
+        reason: RelayFailureReason,
+        message: String,
+    },
+}
+
+/// Typed cause of a terminal relay-share failure, surfaced to the `share`
+/// plugin so it can render dedicated UI states without parsing diagnostic prose.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RelayFailureReason {
+    /// The relay rejected the tunnel-auth token.
+    AuthRejected,
+    /// The relay does not support this Zellij's relay protocol version.
+    ProtocolMismatch {
+        supported_min: u32,
+        supported_max: u32,
+        offered_version: u32,
+    },
+    /// The relay could not be reached (network failure, reconnect budget
+    /// exhausted, malformed/unexpected frames, or an otherwise unclassified
+    /// failure).
+    Unreachable,
 }
 
 impl ModeInfo {
@@ -3358,6 +3398,109 @@ impl NewPanePlacement {
 
 type Context = BTreeMap<String, String>;
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuestLink {
+    pub link_id: Vec<u8>,
+    pub label: String,
+    pub read_only: bool,
+    pub enroll: bool,
+    pub url: String,
+    pub spent: bool,
+    pub active: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingAdmission {
+    pub client_id: u32,
+    pub sas: String,
+    pub label: String,
+    pub read_only: bool,
+    pub claimed_name: Option<String>,
+    pub contested: bool,
+    pub seconds_remaining: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DeviceScope {
+    #[serde(rename = "session")]
+    Session,
+    #[serde(rename = "host")]
+    Host,
+}
+
+impl Default for DeviceScope {
+    fn default() -> Self {
+        DeviceScope::Session
+    }
+}
+
+impl DeviceScope {
+    pub fn from_token(token: &str) -> Self {
+        match token {
+            "host" => DeviceScope::Host,
+            _ => DeviceScope::Session,
+        }
+    }
+    pub fn as_token(&self) -> &'static str {
+        match self {
+            DeviceScope::Session => "session",
+            DeviceScope::Host => "host",
+        }
+    }
+    pub fn is_host(&self) -> bool {
+        matches!(self, DeviceScope::Host)
+    }
+}
+
+impl std::fmt::Display for DeviceScope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_token())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DeviceStorageLevel {
+    #[serde(rename = "file, perms-only")]
+    FilePermsOnly,
+}
+
+impl Default for DeviceStorageLevel {
+    fn default() -> Self {
+        DeviceStorageLevel::FilePermsOnly
+    }
+}
+
+impl DeviceStorageLevel {
+    pub fn from_token(_token: &str) -> Self {
+        DeviceStorageLevel::FilePermsOnly
+    }
+    pub fn as_token(&self) -> &'static str {
+        match self {
+            DeviceStorageLevel::FilePermsOnly => "file, perms-only",
+        }
+    }
+    pub fn label(&self) -> &'static str {
+        self.as_token()
+    }
+}
+
+impl std::fmt::Display for DeviceStorageLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_token())
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnrolledDevice {
+    pub device_id: Vec<u8>,
+    pub label: String,
+    pub read_only: bool,
+    pub scope: DeviceScope,
+    pub last_used: Option<u64>,
+    pub storage_level: DeviceStorageLevel,
+    pub connected: bool,
+}
+
 #[derive(Debug, Clone, EnumDiscriminants, Display)]
 #[strum_discriminants(derive(EnumString, Hash, Serialize, Deserialize))]
 #[strum_discriminants(name(CommandType))]
@@ -3561,6 +3704,18 @@ pub enum PluginCommand {
     StopWebServer,
     ShareCurrentSession,
     StopSharingCurrentSession,
+    ShareCurrentSessionToRelay,
+    StopSharingCurrentSessionFromRelay,
+    /// Phase 6 Session C: persist a relay tunnel-auth token into the sharer's
+    /// runtime config. Empty string clears the configured token.
+    SetRelayTunnelAuthToken(String),
+    RelayMintGuestLink { read_only: bool, label: String, enroll: bool },
+    RelayRevokeGuestLink { link_id: Vec<u8> },
+    RelayListGuestLinks,
+    RelayListPendingAdmissions,
+    RelayResolveAdmission { client_id: u32, admit: bool, code_confirmed: bool },
+    RelayListDevices,
+    RelayRevokeDevice { device_id: Vec<u8> },
     OpenFileInPlaceOfPlugin(FileToOpen, bool, Context), // bool -> close_plugin_after_replace
     GroupAndUngroupPanes(Vec<PaneId>, Vec<PaneId>, bool), // panes to group, panes to ungroup,
     // bool -> for all clients

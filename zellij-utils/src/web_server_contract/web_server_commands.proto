@@ -5,9 +5,6 @@ message InstructionForWebServer {
   oneof instruction {
     ShutdownWebServerMsg shutdown_web_server = 1;
     QueryVersionMsg query_version = 2;
-    // Future commands can be added here
-    // RestartWebServerMsg restart_web_server = 3;
-    // ReloadConfigMsg reload_config = 4;
   }
 }
 

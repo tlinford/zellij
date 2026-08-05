@@ -517,6 +517,30 @@ message ModeUpdatePayload {
   repeated string nested_ascend_keys = 20;
   optional bool session_ascended = 21;
   repeated string nested_descend_keys = 22;
+  optional RelayShareStatus relay_share_status = 23;
+}
+
+message RelayShareStatus {
+  RelayShareState state = 1;
+  optional string url = 2;
+  optional uint32 attempt = 4;
+  optional string message = 5;
+  optional RelayFailureReason failure_reason = 6;
+  optional uint32 supported_min = 7;
+  optional uint32 supported_max = 8;
+  optional uint32 offered_version = 9;
+}
+
+enum RelayShareState {
+  Connected = 0;
+  Reconnecting = 1;
+  Failed = 2;
+}
+
+enum RelayFailureReason {
+  AuthRejected = 0;
+  ProtocolMismatch = 1;
+  Unreachable = 2;
 }
 
 enum WebSharing {

@@ -1,0 +1,253 @@
+#!/usr/bin/env bash
+# One-click relay deploy for the zellij-relay testbed.
+#
+# Drives everything on the VPS over an SSH docker context — no files are
+# copied to the host, no shell sessions are opened, no manual steps on the VPS
+# beyond the initial SSH key setup.
+#
+# Usage:
+#     ./deploy.sh [COMMAND] [FLAGS]
+#
+# Commands (default: deploy):
+#     deploy         build images, obtain cert if missing, start the stack, health check
+#     logs           tail compose logs (optionally for one service)
+#     ps             compose status
+#     restart        restart the stack
+#     destroy        compose down -v (prompts; deletes the cert volume)
+#     create-token   mint a relay tunnel auth token (optional positional label or --label)
+#     list-tokens    list relay tunnel auth tokens stored on the relay
+#     revoke-token   revoke a relay tunnel auth token by label or raw token
+#
+# Flags:
+#     --vps-ip       <host>  SSH/deploy target of the VPS                 (optional; default relay.zellij.online)
+#     --vps-user     <user>  SSH user on the VPS (e.g. root)              (required for all host-bound commands)
+#     --le-email     <email> contact email for LetsEncrypt                (required for deploy)
+#     --public-host  <fqdn>  relay host for TLS cert + server_name        (optional; default relay.zellij.online)
+#     --service    <name>    restrict `logs` to one compose service       (optional)
+#     --label      <name>    label for create-token / revoke-token        (optional for create-token; required for revoke-token unless given positionally)
+#     -h, --help             show this help
+#
+# Example:
+#     ./deploy.sh deploy --vps-user root --le-email you@zellij.online
+#
+#     ./deploy.sh create-token my-laptop --vps-user root
+#     ./deploy.sh list-tokens             --vps-user root
+#     ./deploy.sh revoke-token my-laptop  --vps-user root
+#
+# This deploy is transport-only: the relay host (cert + server_name + SSH
+# target) defaults to relay.zellij.online and serves no HTML. The browser
+# viewer is served from a SEPARATE app origin (APP_ORIGIN, default
+# https://zellij.online), configured out-of-band; APP_ORIGIN drives the
+# public URL template and the relay's CORS allowlist.
+#
+# The SSH target and relay host both default to relay.zellij.online; its DNS A
+# record must point at the VPS before deploy, or cert issuance fails. To deploy
+# by raw IP (e.g. first bring-up before DNS is pointed) or to a sslip.io
+# testbed, pass --vps-ip and/or --public-host:
+#     --vps-ip 203.0.113.42 --public-host 203-0-113-42.sslip.io
+
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+usage() {
+    sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'
+    exit "${1:-0}"
+}
+
+# ---------- argument parsing ----------
+
+CMD=""
+VPS_IP=""
+VPS_USER=""
+LE_EMAIL=""
+LOG_SERVICE=""
+TOKEN_LABEL=""
+PUBLIC_HOST_OVERRIDE=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        deploy|logs|ps|restart|destroy|create-token|list-tokens|revoke-token)
+            [ -z "$CMD" ] || { echo "error: multiple commands given: $CMD, $1" >&2; exit 2; }
+            CMD="$1"; shift ;;
+        --vps-ip)       VPS_IP="${2:-}";      shift 2 ;;
+        --vps-ip=*)     VPS_IP="${1#*=}";     shift ;;
+        --vps-user)     VPS_USER="${2:-}";    shift 2 ;;
+        --vps-user=*)   VPS_USER="${1#*=}";   shift ;;
+        --le-email)     LE_EMAIL="${2:-}";    shift 2 ;;
+        --le-email=*)   LE_EMAIL="${1#*=}";   shift ;;
+        --public-host)   PUBLIC_HOST_OVERRIDE="${2:-}";  shift 2 ;;
+        --public-host=*) PUBLIC_HOST_OVERRIDE="${1#*=}"; shift ;;
+        --service)      LOG_SERVICE="${2:-}"; shift 2 ;;
+        --service=*)    LOG_SERVICE="${1#*=}"; shift ;;
+        --label)        TOKEN_LABEL="${2:-}"; shift 2 ;;
+        --label=*)      TOKEN_LABEL="${1#*=}"; shift ;;
+        -h|--help)      usage 0 ;;
+        *)
+            # Allow a single positional argument after token subcommands as a
+            # convenience: `./deploy.sh create-token my-laptop` ≡ `--label my-laptop`.
+            if [ -z "$TOKEN_LABEL" ] && { [ "$CMD" = "create-token" ] || [ "$CMD" = "revoke-token" ]; }; then
+                TOKEN_LABEL="$1"; shift
+            else
+                echo "error: unknown argument: $1" >&2; usage 2
+            fi
+            ;;
+    esac
+done
+
+CMD="${CMD:-deploy}"
+
+need_host_flags() {
+    [ -n "$VPS_USER" ] || { echo "error: --vps-user is required for '$CMD'" >&2; exit 2; }
+}
+
+# ---------- derived settings ----------
+
+DEFAULT_PUBLIC_HOST="relay.zellij.online"
+DEFAULT_APP_ORIGIN="https://zellij.online"
+
+VPS_IP="${VPS_IP:-$DEFAULT_PUBLIC_HOST}"
+PUBLIC_HOST="${PUBLIC_HOST_OVERRIDE:-$DEFAULT_PUBLIC_HOST}"
+APP_ORIGIN="${APP_ORIGIN:-$DEFAULT_APP_ORIGIN}"
+
+export PUBLIC_HOST
+export APP_ORIGIN
+export DOCKER_HOST="ssh://${VPS_USER}@${VPS_IP}"
+export COMPOSE_PROJECT_NAME="zellij-relay"
+
+# ---------- helpers ----------
+
+ssh_cmd() {
+    ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes "${VPS_USER}@${VPS_IP}" "$@"
+}
+
+ensure_docker() {
+    if ssh_cmd 'command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1'; then
+        return 0
+    fi
+
+    echo "[deploy] docker not present (or current user lacks access); installing..."
+    ssh_cmd 'curl -fsSL https://get.docker.com | sudo sh'
+    ssh_cmd "sudo usermod -aG docker ${VPS_USER}"
+    ssh -O exit "${VPS_USER}@${VPS_IP}" >/dev/null 2>&1 || true
+
+    if ! ssh_cmd 'docker info >/dev/null 2>&1'; then
+        cat >&2 <<EOF
+[deploy] Docker installed but the SSH user still cannot talk to it.
+         Log out and back in once, then re-run:
+             ssh ${VPS_USER}@${VPS_IP} exit
+             ./deploy.sh deploy --vps-ip ${VPS_IP} --vps-user ${VPS_USER} --le-email ${LE_EMAIL}
+EOF
+        exit 1
+    fi
+}
+
+do_deploy() {
+    need_host_flags
+    [ -n "$LE_EMAIL" ] || { echo "error: --le-email is required for 'deploy'" >&2; exit 2; }
+
+    echo "[deploy] VPS              : ${VPS_USER}@${VPS_IP}"
+    echo "[deploy] PUBLIC_HOST      : ${PUBLIC_HOST}"
+    echo "[deploy] APP_ORIGIN       : ${APP_ORIGIN}"
+    echo "[deploy] DOCKER_HOST      : ${DOCKER_HOST}"
+    echo "[deploy] COMPOSE_PROJECT  : ${COMPOSE_PROJECT_NAME}"
+    echo
+
+    ensure_docker
+
+    echo "[deploy] building images on VPS (--no-cache; full rebuild every run)..."
+    docker compose build --no-cache
+
+    echo "[deploy] ensuring TLS cert..."
+    LE_EMAIL="$LE_EMAIL" PUBLIC_HOST="$PUBLIC_HOST" ./bootstrap-cert.sh
+
+    echo "[deploy] starting stack..."
+    docker compose up -d --force-recreate
+
+    echo "[deploy] waiting for https://${PUBLIC_HOST}/health ..."
+    for i in $(seq 1 30); do
+        if curl -fsS --max-time 3 "https://${PUBLIC_HOST}/health" >/dev/null 2>&1; then
+            echo "[deploy]     healthy"
+            break
+        fi
+        if [ "${i}" -eq 30 ]; then
+            echo "[deploy] WARN: health check did not succeed within 60s. Check './deploy.sh logs --vps-ip ${VPS_IP} --vps-user ${VPS_USER}'." >&2
+        fi
+        sleep 2
+    done
+
+    cat <<EOF
+
+──────────────────────────────────────────────────────────────────────
+  Deploy complete.
+
+  Configure local Zellij (skip on the default host — wss://zellij.online
+  is the built-in default relay):
+      cargo x run -- options --relay-server-url wss://${PUBLIC_HOST}
+    or add to KDL config:
+      options { relay_server_url "wss://${PUBLIC_HOST}"; }
+
+  Share plugin:  Ctrl-o → share → 't' → 'n' to generate a token,
+                 then press 'i' to open the tunnel.
+
+  Public URL pattern (points at the app origin serving the viewer):
+      ${APP_ORIGIN}/r/<slug>
+
+  Operate the stack (shorthand: save VPS_IP/VPS_USER in a shell alias):
+      ./deploy.sh logs    --vps-ip ${VPS_IP} --vps-user ${VPS_USER}
+      ./deploy.sh ps      --vps-ip ${VPS_IP} --vps-user ${VPS_USER}
+      ./deploy.sh restart --vps-ip ${VPS_IP} --vps-user ${VPS_USER}
+      ./deploy.sh destroy --vps-ip ${VPS_IP} --vps-user ${VPS_USER}
+──────────────────────────────────────────────────────────────────────
+EOF
+}
+
+# ---------- dispatch ----------
+
+case "$CMD" in
+    deploy)
+        do_deploy
+        ;;
+    logs)
+        need_host_flags
+        docker compose logs -f --tail=200 ${LOG_SERVICE:+$LOG_SERVICE}
+        ;;
+    ps)
+        need_host_flags
+        docker compose ps
+        ;;
+    restart)
+        need_host_flags
+        docker compose restart
+        ;;
+    destroy)
+        need_host_flags
+        printf "[deploy] This will run 'docker compose down -v' on %s (deletes cert volume!). Type YES to continue: " "${VPS_IP}"
+        read -r ans
+        [ "${ans}" = "YES" ] || { echo "[deploy] aborted"; exit 1; }
+        docker compose down -v
+        ;;
+    create-token)
+        need_host_flags
+        # `docker compose exec` bypasses the image ENTRYPOINT, so the binary
+        # path is supplied explicitly. Token DB lives on the `relay-data`
+        # named volume mounted at /var/lib/zellij-relay.
+        if [ -n "$TOKEN_LABEL" ]; then
+            docker compose exec relay zellij-relay-server create-token "$TOKEN_LABEL"
+        else
+            docker compose exec relay zellij-relay-server create-token
+        fi
+        ;;
+    list-tokens)
+        need_host_flags
+        docker compose exec relay zellij-relay-server list-tokens
+        ;;
+    revoke-token)
+        need_host_flags
+        [ -n "$TOKEN_LABEL" ] || { echo "error: 'revoke-token' requires a label or token (positional or --label)" >&2; exit 2; }
+        docker compose exec relay zellij-relay-server revoke-token "$TOKEN_LABEL"
+        ;;
+    *)
+        usage 2
+        ;;
+esac

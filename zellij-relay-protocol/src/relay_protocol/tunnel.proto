@@ -1,0 +1,148 @@
+syntax = "proto3";
+package zellij.relay.v1;
+
+// Tunnel handshake: sent by the Zellij instance as the first message on the
+// control WebSocket.
+message TunnelAuth {
+  string token = 1;            // relay tunnel auth token (sharer → relay)
+  string session_name = 2;
+  uint32 protocol_version = 3;
+  string zellij_version = 4;
+  // Phase 6 reconnect support: when reconnecting after an unexpected
+  // drop, the client supplies the previously-issued slug so the relay
+  // can reuse it if still free. Empty string on a fresh handshake. The
+  // relay falls back to a freshly-generated slug if the requested one
+  // is already occupied.
+  string requested_slug = 5;
+  // Role of the whole tunnel/slug. When true, the relay drops any
+  // viewer-originated input frames on this tunnel (read-only slug). Role is
+  // a per-slug property: a session that wants both read-only and read-write
+  // viewers opens two tunnels.
+  bool read_only = 6;
+}
+
+// Relay response to a successful TunnelAuth.
+message TunnelEstablished {
+  string public_url = 1;
+  string slug = 2;
+  string tunnel_id = 3;
+}
+
+// Classification of a TunnelError so receivers branch on a typed code rather
+// than substring-matching the human-readable `message`.
+enum TunnelErrorCode {
+  TUNNEL_ERROR_UNSPECIFIED = 0;
+  MALFORMED_FRAME = 1;
+  UNEXPECTED_FRAME = 2;
+  PROTOCOL_VERSION_UNSUPPORTED = 3;
+  AUTH_REJECTED = 4;
+  MISSING_SLUG = 5;
+  UNKNOWN_SLUG = 6;
+  TUNNEL_ID_MISMATCH = 7;
+}
+
+// Error surface on either the control or the terminal tunnel. `message` is a
+// human-readable diagnostic only; receivers key off `code`. For
+// PROTOCOL_VERSION_UNSUPPORTED the supported range and offered version are
+// carried in the structured fields.
+message TunnelError {
+  string message = 1;
+  TunnelErrorCode code = 2;
+  uint32 supported_min = 3;
+  uint32 supported_max = 4;
+  uint32 offered_version = 5;
+}
+
+// Terminal tunnel linking message sent by the Zellij instance once the
+// terminal WebSocket is opened for a previously-established tunnel.
+message TunnelReady {
+  string tunnel_id = 1;
+  string token = 2;
+}
+
+// Relay → Zellij: a viewer has begun a SPAKE2 password-authenticated key
+// exchange. `viewer_msg` is the viewer's opaque SPAKE2 message; the relay
+// forwards it without inspection (it carries nothing derived from the secret
+// that the relay could grind). `request_id` demultiplexes concurrent
+// handshakes.
+message PakeChallenge {
+  bytes request_id = 1;
+  bytes viewer_msg = 2;
+  bytes link_id = 3;
+}
+
+// Zellij → Relay: the sharer's reply to a PakeChallenge. On `accepted`, the
+// sharer allocates `client_id`, returns its own SPAKE2 message `sharer_msg`
+// and a key-confirmation tag `sharer_confirm` over the transcript. `accepted`
+// is false when the slug's credential is locked out or absent.
+message PakeResponse {
+  bytes request_id = 1;
+  uint32 client_id = 2;
+  bool accepted = 3;
+  bytes sharer_msg = 4;
+  bytes sharer_confirm = 5;
+}
+
+// Relay → Zellij: the viewer's key-confirmation tag, completing the second
+// round-trip. The sharer verifies it to detect a wrong secret or a tampering
+// relay before any data flows.
+message PakeConfirm {
+  bytes request_id = 1;
+  bytes viewer_confirm = 2;
+}
+
+// Zellij → Relay: final handshake outcome. On `accepted`, the sharer has
+// verified the viewer's confirmation and spawned the per-viewer client; the
+// relay finalises routing for `client_id`. On reject, the relay drops the
+// viewer (uniform 401) and the sharer counts the failed attempt for lockout.
+message PakeResult {
+  bytes request_id = 1;
+  uint32 client_id = 2;
+  bool accepted = 3;
+}
+
+// Relay → Zellij (or Zellij → Relay on server-initiated disconnect): the
+// viewer is gone. After this frame, no additional frames for `client_id`
+// will be generated.
+message ClientDisconnected {
+  uint32 client_id = 1;
+}
+
+// Per-client control-plane payload (text WebSocket frames in the local
+// web client's JSON control protocol). Dropped by the relay on a read-only
+// tunnel.
+message ControlFrameData {
+  uint32 client_id = 1;
+  bytes data = 2;
+}
+
+// Per-client terminal-plane payload. Always ciphertext (`nonce || ciphertext`)
+// under the per-viewer session key; the relay forwards it without decrypting.
+message TerminalFrameData {
+  uint32 client_id = 1;
+  bytes data = 2;
+}
+
+// Envelope for all control-tunnel messages.
+message ControlFrame {
+  oneof payload {
+    TunnelAuth auth = 1;
+    TunnelEstablished established = 2;
+    TunnelError error = 3;
+    PakeChallenge pake_challenge = 4;
+    PakeResponse pake_response = 5;
+    PakeConfirm pake_confirm = 6;
+    PakeResult pake_result = 7;
+    ClientDisconnected client_disconnected = 8;
+    ControlFrameData control_frame_data = 9;
+  }
+}
+
+// Envelope for all terminal-tunnel messages.
+message TerminalFrame {
+  oneof payload {
+    TunnelReady ready = 1;
+    TunnelError error = 2;
+    TerminalFrameData terminal_frame_data = 3;
+  }
+}

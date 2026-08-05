@@ -183,6 +183,7 @@ pub enum ContextType {
     AsyncTask,
     PtyWrite(PtyWriteContext),
     BackgroundJob(BackgroundJobContext),
+    Relay(RelayContext),
     /// An empty, placeholder call. This should be thought of as representing no call at all.
     /// A call stack representation filled with these is the representation of an empty call stack.
     Empty,
@@ -200,6 +201,7 @@ impl Display for ContextType {
             ContextType::AsyncTask => Some(("stream_terminal_bytes:", "AsyncTask".to_string())),
             ContextType::PtyWrite(c) => Some(("pty_writer_thread:", format!("{:?}", c))),
             ContextType::BackgroundJob(c) => Some(("background_jobs_thread:", format!("{:?}", c))),
+            ContextType::Relay(c) => Some(("relay_connections_thread:", format!("{:?}", c))),
             ContextType::Empty => None,
         } {
             write!(f, "{} {}", left.purple(), right.green())
@@ -428,6 +430,9 @@ pub enum ScreenContext {
     TogglePaneInGroup,
     ToggleGroupMarking,
     SessionSharingStatusChange,
+    RelayShareStatusChange,
+    LaunchOrFocusSharePlugin,
+    RefreshSharePlugin,
     SetMouseSelectionSupport,
     InterceptKeyPresses,
     ClearKeyPressesIntercepts,
@@ -618,6 +623,9 @@ pub enum ServerContext {
     StartWebServer,
     ShareCurrentSession,
     StopSharingCurrentSession,
+    ShareCurrentSessionToRelay,
+    StopSharingCurrentSessionFromRelay,
+    SetRelayTunnelAuthToken,
     WebServerStarted,
     FailedToStartWebServer,
     SendWebClientsForbidden,
@@ -633,6 +641,13 @@ pub enum PtyWriteContext {
     ResizePty,
     StartCachingResizes,
     ApplyCachedResizes,
+    Exit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub enum RelayContext {
+    StartShare,
+    StopShare,
     Exit,
 }
 

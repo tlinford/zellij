@@ -9,6 +9,7 @@
 mod assets;
 mod build;
 mod ci;
+mod dev;
 mod flags;
 mod format;
 mod integration_test;
@@ -99,11 +100,39 @@ fn workspace_members() -> &'static Vec<WorkspaceMember> {
                 build: false,
             },
             WorkspaceMember {
+                crate_name: "zellij-relay-protocol",
+                build: false,
+            },
+            WorkspaceMember {
+                crate_name: "zellij-browser-bridge",
+                build: false,
+            },
+            WorkspaceMember {
+                crate_name: "zellij-relay-client",
+                build: false,
+            },
+            WorkspaceMember {
+                crate_name: "zellij-ansi-clip",
+                build: false,
+            },
+            WorkspaceMember {
+                crate_name: "zellij-relay-crypto-wasm",
+                build: false,
+            },
+            WorkspaceMember {
+                crate_name: "zellij-web-client-assets",
+                build: false,
+            },
+            WorkspaceMember {
                 crate_name: "zellij-client",
                 build: false,
             },
             WorkspaceMember {
                 crate_name: "zellij-server",
+                build: false,
+            },
+            WorkspaceMember {
+                crate_name: "zellij-relay-server",
                 build: false,
             },
             WorkspaceMember {
@@ -117,12 +146,18 @@ fn workspace_members() -> &'static Vec<WorkspaceMember> {
 fn main() -> anyhow::Result<()> {
     let shell = &Shell::new()?;
 
+    let raw_args: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();
+    if raw_args.first().map(|a| a == "relay-server").unwrap_or(false) {
+        return pipelines::relay_server(shell, &raw_args[1..]);
+    }
+
     let flags = flags::Xtask::from_env()?;
     let now = Instant::now();
 
     match flags.subcommand {
         flags::XtaskCmd::Deprecated(_flags) => deprecation_notice(),
         flags::XtaskCmd::Build(flags) => build::build(shell, flags),
+        flags::XtaskCmd::RelayDev(flags) => dev::relay_dev(shell, flags),
         flags::XtaskCmd::Format(flags) => format::format(shell, flags),
         flags::XtaskCmd::Test(flags) => test::test(shell, flags),
         flags::XtaskCmd::IntegrationTest(flags) => integration_test::integration_test(shell, flags),

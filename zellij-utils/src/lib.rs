@@ -12,6 +12,9 @@ mod home_windows;
 pub mod input;
 pub mod kdl;
 pub mod nested_session_contract;
+
+#[cfg(not(target_family = "wasm"))]
+pub mod keyboard_parser;
 pub mod pane_size;
 pub mod plugin_api;
 pub mod position;

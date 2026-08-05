@@ -673,11 +673,14 @@ impl MockScreen {
             plugin_thread: None,
             pty_writer_thread: None,
             background_jobs_thread: None,
+            #[cfg(feature = "web_server_capability")]
+            relay_connection: None,
             session_configuration: self.session_metadata.session_configuration.clone(),
             current_input_modes: self.session_metadata.current_input_modes.clone(),
             web_sharing: WebSharing::Off,
             config_file_path: self.session_metadata.config_file_path.clone(),
             key_passthrough_clients: self.session_metadata.key_passthrough_clients.clone(),
+            relay_share_active: self.session_metadata.relay_share_active.clone(),
         }
     }
 }
@@ -727,11 +730,14 @@ impl MockScreen {
             plugin_thread: None,
             pty_writer_thread: None,
             background_jobs_thread: None,
+            #[cfg(feature = "web_server_capability")]
+            relay_connection: None,
             session_configuration: Default::default(),
             current_input_modes: HashMap::new(),
             web_sharing: WebSharing::Off,
             config_file_path: None,
             key_passthrough_clients: Default::default(),
+            relay_share_active: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         };
 
         let os_input = FakeInputOutput::default();

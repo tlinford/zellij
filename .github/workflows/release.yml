@@ -89,9 +89,13 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get install -y --no-install-recommends musl-tools
 
+      # Reproducibility: pin the toolchain via rust-toolchain.toml (channel is
+      # read from it) so release artifacts and the app-origin RELEASE_HASHES.txt
+      # reproduce byte-for-byte. Do not float to `stable`.
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
+          toolchain: "1.92.0"
           target: "${{ matrix.target }},wasm32-wasip1"
           cache: false
           rustflags: ""
@@ -285,9 +289,13 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get install -y --no-install-recommends musl-tools
 
+      # Reproducibility: pin the toolchain via rust-toolchain.toml (channel is
+      # read from it) so release artifacts reproduce byte-for-byte. Do not
+      # float to `stable`.
       - name: Install Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
+          toolchain: "1.92.0"
           target: "${{ matrix.target }},wasm32-wasip1"
           cache: false
           rustflags: ""
@@ -412,5 +420,116 @@ jobs:
           upload_url: ${{ needs.create-release.outputs.upload_url }}
           asset_path: ${{ steps.make-checksum-msi.outputs.checksum_name }}
           asset_name: zellij-no-web-${{ matrix.target }}-installer.sha256sum
+          asset_content_type: text/plain
+
+  # Builds the app-origin static site (browser viewer) and publishes its
+  # RELEASE_HASHES.txt manifest so users can verify the bytes a live app origin
+  # serves against this release (see docs/THREAT_MODEL.md and
+  # scripts/verify-app-origin.sh).
+  build-app-origin:
+    needs: create-release
+    name: build-app-origin
+    runs-on: ubuntu-latest
+    env:
+      RUST_BACKTRACE: 1
+      # Reproducibility: pin a single binaryen/wasm-opt version so the wasm
+      # (and therefore RELEASE_HASHES.txt) reproduces byte-for-byte. Bump this
+      # in lockstep with any wasm-opt flag changes in xtask.
+      BINARYEN_VERSION: "version_119"
+    steps:
+      - name: Set release tag
+        run: |
+          if [ "$GITHUB_EVENT_NAME" == 'workflow_dispatch' ]; then
+            echo "RELEASE_TAG=main" >> "$GITHUB_ENV"
+          else
+            echo "RELEASE_TAG=${GITHUB_REF#refs/tags/}"  >> "$GITHUB_ENV"
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v2
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Reproducibility: pin the toolchain (channel from rust-toolchain.toml) so
+      # the wasm reproduces byte-for-byte. Do not float to `stable`.
+      - name: Install Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: "1.92.0"
+          target: "wasm32-wasip1"
+          cache: false
+          rustflags: ""
+
+      # Reproducibility: a single pinned binaryen release provides the exact
+      # wasm-opt used to optimize the wasm. The xtask passes deterministic
+      # flags (-Oz + fixed --enable-* features); pinning the optimizer closes
+      # the last source of nondeterminism.
+      - name: Install pinned wasm-opt (binaryen)
+        run: |
+          url="https://github.com/WebAssembly/binaryen/releases/download/${BINARYEN_VERSION}/binaryen-${BINARYEN_VERSION}-x86_64-linux.tar.gz"
+          curl -fsSL "$url" -o binaryen.tar.gz
+          tar xzf binaryen.tar.gz
+          echo "$PWD/binaryen-${BINARYEN_VERSION}/bin" >> "$GITHUB_PATH"
+
+      - name: Verify wasm-opt is the pinned version
+        run: wasm-opt --version
+
+      # Staging hard-errors unless the rolled-up digest computed over the
+      # staged v/<version>/ bundle equals the value the release binary attests
+      # (zellij_web_client_assets::app_bundle_sha384). This is the primary
+      # binary<->bundle parity guard; the explicit check below is belt-and-
+      # suspenders against a stale committed asset.
+      - name: Build app-origin static site (wasm + viewer)
+        run: cargo x build --app-origin out/ --app-host zellij.online
+
+      # Reproducibility self-check: a clean rebuild must produce an identical
+      # RELEASE_HASHES.txt. Because that manifest covers the whole tree, this
+      # also pins out/v/<version>/app-manifest.json and app_bundle_sha384.txt.
+      - name: Assert RELEASE_HASHES.txt (incl. versioned bundle) is reproducible
+        run: |
+          cp out/RELEASE_HASHES.txt /tmp/RELEASE_HASHES.first.txt
+          rm -rf out
+          cargo x build --app-origin out/ --app-host zellij.online
+          if ! diff -u /tmp/RELEASE_HASHES.first.txt out/RELEASE_HASHES.txt; then
+            echo "::error::RELEASE_HASHES.txt is not reproducible across clean rebuilds"
+            exit 1
+          fi
+
+      # Belt-and-suspenders: confirm the attested digest file is present and
+      # well-formed. The staging step already aborts the build on a mismatch
+      # between the staged bundle and the binary-attested digest.
+      - name: Assert app bundle digest is present
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"(.*)".*/\1/')
+          digest_file="out/v/${version}/app_bundle_sha384.txt"
+          if [ ! -s "$digest_file" ]; then
+            echo "::error::missing app_bundle_sha384.txt for version ${version}"
+            exit 1
+          fi
+          if ! grep -q '^sha384-' "$digest_file"; then
+            echo "::error::app_bundle_sha384.txt is not a sha384 digest"
+            exit 1
+          fi
+
+      # Publish the full static site (core + append-only v/<version>/ bundle).
+      # The deploy step overlays this tree onto the live site so prior
+      # v/<oldversion>/ directories are preserved (never deleted).
+      - name: Upload app-origin site tree
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-origin-site
+          path: out/
+
+      - name: Upload RELEASE_HASHES.txt
+        uses: actions/upload-release-asset@v1.0.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload_url }}
+          asset_path: out/RELEASE_HASHES.txt
+          asset_name: RELEASE_HASHES.txt
           asset_content_type: text/plain
 

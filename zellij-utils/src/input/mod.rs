@@ -20,7 +20,10 @@ mod not_wasm {
         data::{BareKey, InputMode, KeyModifier, KeyWithModifier, ModeInfo, PluginCapabilities},
         envs,
         ipc::ClientAttributes,
-        vendored::termwiz::input::{InputEvent, InputParser, KeyCode, KeyEvent, Modifiers},
+        vendored::termwiz::input::{
+            InputEvent, InputParser, KeyCode, KeyEvent, Modifiers, MouseButtons,
+            MouseEvent as TermwizMouseEvent,
+        },
     };
 
     use super::keybinds::Keybinds;
@@ -61,6 +64,7 @@ mod not_wasm {
             nested_ascend_keys: vec![],
             session_ascended: None,
             nested_descend_keys: vec![],
+            relay_share_status: None,
         }
     }
 
@@ -76,6 +80,102 @@ mod not_wasm {
         };
         input_parser.parse(input_bytes, parse_input_event, maybe_more);
         ret
+    }
+
+    fn termwiz_mouse_convert(
+        original_event: &mut super::mouse::MouseEvent,
+        event: &TermwizMouseEvent,
+    ) {
+        let button_bits = &event.mouse_buttons;
+        original_event.left = button_bits.contains(MouseButtons::LEFT);
+        original_event.right = button_bits.contains(MouseButtons::RIGHT);
+        original_event.middle = button_bits.contains(MouseButtons::MIDDLE);
+        original_event.wheel_up = button_bits.contains(MouseButtons::VERT_WHEEL)
+            && button_bits.contains(MouseButtons::WHEEL_POSITIVE);
+        original_event.wheel_down = button_bits.contains(MouseButtons::VERT_WHEEL)
+            && !button_bits.contains(MouseButtons::WHEEL_POSITIVE);
+        original_event.wheel_right = button_bits.contains(MouseButtons::HORZ_WHEEL)
+            && button_bits.contains(MouseButtons::WHEEL_POSITIVE);
+        original_event.wheel_left = button_bits.contains(MouseButtons::HORZ_WHEEL)
+            && !button_bits.contains(MouseButtons::WHEEL_POSITIVE);
+
+        let mods = &event.modifiers;
+        original_event.shift = mods.contains(Modifiers::SHIFT);
+        original_event.alt = mods.contains(Modifiers::ALT);
+        original_event.ctrl = mods.contains(Modifiers::CTRL);
+    }
+
+    pub fn from_termwiz(
+        old_event: &mut super::mouse::MouseEvent,
+        event: TermwizMouseEvent,
+    ) -> super::mouse::MouseEvent {
+        use super::mouse::{MouseEvent, MouseEventType};
+        // We use the state of old_event vs new_event to determine if this
+        // event is a Press, Release, or Motion.  This is an unfortunate
+        // side effect of the pre-SGR-encoded X10 mouse protocol design in
+        // which release events don't carry information about WHICH
+        // button(s) were released, so we have to maintain a wee bit of
+        // state in between events.
+        //
+        // Note that only Left, Right, and Middle are saved in between
+        // calls.  WheelUp/WheelDown typically do not generate Release
+        // events.
+        let mut new_event = MouseEvent::new();
+        termwiz_mouse_convert(&mut new_event, &event);
+        new_event.position =
+            crate::position::Position::new(event.y.saturating_sub(1) as i32, event.x.saturating_sub(1));
+
+        if (new_event.left && !old_event.left)
+            || (new_event.right && !old_event.right)
+            || (new_event.middle && !old_event.middle)
+            || new_event.wheel_up
+            || new_event.wheel_down
+            || new_event.wheel_left
+            || new_event.wheel_right
+        {
+            // This is a mouse Press event.
+            new_event.event_type = MouseEventType::Press;
+
+            // Hang onto the button state.
+            *old_event = new_event;
+        } else if event.mouse_buttons.is_empty()
+            && !old_event.left
+            && !old_event.right
+            && !old_event.middle
+        {
+            // This is a mouse Motion event (no buttons are down).
+            new_event.event_type = MouseEventType::Motion;
+
+            // Hang onto the button state.
+            *old_event = new_event;
+        } else if event.mouse_buttons.is_empty()
+            && (old_event.left || old_event.right || old_event.middle)
+        {
+            // This is a mouse Release event.  Note that we set
+            // old_event.{button} to false (to release), but set ONLY the
+            // new_event that were released to true before sending the
+            // event up.
+            if old_event.left {
+                old_event.left = false;
+                new_event.left = true;
+            }
+            if old_event.right {
+                old_event.right = false;
+                new_event.right = true;
+            }
+            if old_event.middle {
+                old_event.middle = false;
+                new_event.middle = true;
+            }
+            new_event.event_type = MouseEventType::Release;
+        } else {
+            // Dragging with some button down.  Return it as a Motion
+            // event, and hang on to the button state.
+            new_event.event_type = MouseEventType::Motion;
+            *old_event = new_event;
+        }
+
+        new_event
     }
 
     fn key_is_bound(key: &KeyWithModifier, keybinds: &Keybinds, mode: &InputMode) -> bool {

@@ -662,6 +662,7 @@ pub(crate) fn start_client(opts: CliArgs) {
                     token: None,
                     remember: false,
                     forget: false,
+                    repin: false,
                     ca_cert: None,
                     insecure: false,
                 }));
@@ -696,6 +697,7 @@ pub(crate) fn start_client(opts: CliArgs) {
             token,
             remember,
             forget,
+            repin,
             ca_cert,
             insecure,
         })) = opts.command.clone()
@@ -724,9 +726,23 @@ pub(crate) fn start_client(opts: CliArgs) {
                     token,
                     remember,
                     forget,
+                    repin,
                     ca_cert,
                     insecure,
                     config_options.client_async_worker_tasks,
+                    // Thread the local `relay_server_url` into the
+                    // attach client's known-relay list so a self-hosted
+                    // relay configured on this machine is trusted
+                    // enough to enforce E2E.
+                    config_options
+                        .relay_server_url
+                        .iter()
+                        .cloned()
+                        .collect(),
+                    config_options.mouse_mode.unwrap_or(true),
+                    config_options
+                        .support_kitty_keyboard_protocol
+                        .unwrap_or(true),
                 ) {
                     eprintln!("{}", e);
                     std::process::exit(2);

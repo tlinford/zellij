@@ -3,7 +3,8 @@ use std::str::FromStr;
 use crate::{
     client_server_contract::client_server_contract::{
         client_to_server_msg, server_to_client_msg, ActionMsg, AttachClientMsg,
-        AttachWatcherClientMsg, BackgroundColorMsg, CliPipeOutputMsg, ClientExitedMsg,
+        AttachRelayWatcherClientMsg, AttachWatcherClientMsg, BackgroundColorMsg, CliPipeOutputMsg,
+        ClientExitedMsg,
         ClientToServerMsg as ProtoClientToServerMsg, ColorRegistersMsg, ConfigFileUpdatedMsg,
         ConnStatusMsg, ConnectedMsg, DesktopNotificationResponseMsg, DetachSessionMsg,
         EmitNestedSessionFrameMsg, ExitMsg, ExitReason as ProtoExitReason,
@@ -20,7 +21,7 @@ use crate::{
         SoftKeyboardVisibilityChangedMsg, StartWebServerMsg, SubscribeToPaneRendersMsg,
         SubscribedPaneClosedMsg, SwitchSessionMsg, TabMetadata as ProtoTabMetadata,
         TerminalPixelDimensionsMsg, TerminalResizeMsg, UnblockCliPipeInputMsg,
-        UnblockInputThreadMsg, WebServerStartedMsg,
+        UnblockInputThreadMsg, WebServerStartedMsg, SessionSizeMsg
     },
     data::{HostTerminalThemeMode, InputMode, PaneId},
     errors::prelude::*,
@@ -88,6 +89,11 @@ impl From<ClientToServerMsg> for ProtoClientToServerMsg {
                 terminal_size: Some(terminal_size.into()),
                 is_web_client,
             }),
+            ClientToServerMsg::AttachRelayWatcherClient { is_web_client } => {
+                client_to_server_msg::Message::AttachRelayWatcherClient(
+                    AttachRelayWatcherClientMsg { is_web_client },
+                )
+            },
             ClientToServerMsg::Action {
                 action,
                 terminal_id,
@@ -260,6 +266,11 @@ impl TryFrom<ProtoClientToServerMsg> for ClientToServerMsg {
                         .ok_or_else(|| anyhow::anyhow!("Missing terminal_size"))?
                         .try_into()?,
                     is_web_client: attach_watcher.is_web_client,
+                })
+            },
+            Some(client_to_server_msg::Message::AttachRelayWatcherClient(attach_relay)) => {
+                Ok(ClientToServerMsg::AttachRelayWatcherClient {
+                    is_web_client: attach_relay.is_web_client,
                 })
             },
             Some(client_to_server_msg::Message::Action(action)) => Ok(ClientToServerMsg::Action {
@@ -444,6 +455,9 @@ impl From<ServerToClientMsg> for ProtoServerToClientMsg {
             },
             ServerToClientMsg::MobileState { payload } => {
                 server_to_client_msg::Message::MobileState(mobile_state_payload_to_proto(payload))
+            },
+            ServerToClientMsg::SessionSize { rows, cols } => {
+                server_to_client_msg::Message::SessionSize(SessionSizeMsg { rows, cols })
             },
         };
 
@@ -687,6 +701,12 @@ impl TryFrom<ProtoServerToClientMsg> for ServerToClientMsg {
             Some(server_to_client_msg::Message::MobileState(msg)) => {
                 Ok(ServerToClientMsg::MobileState {
                     payload: mobile_state_payload_from_proto(msg),
+                })
+            },
+            Some(server_to_client_msg::Message::SessionSize(msg)) => {
+                Ok(ServerToClientMsg::SessionSize {
+                    rows: msg.rows,
+                    cols: msg.cols,
                 })
             },
             None => Err(anyhow!("Empty ServerToClientMsg message")),
@@ -935,6 +955,8 @@ impl From<crate::input::options::Options>
                 .web_server_key
                 .map(|p| p.to_string_lossy().to_string()),
             enforce_https_for_localhost: options.enforce_https_for_localhost,
+            relay_server_url: options.relay_server_url,
+            encrypt_web_sharing: options.encrypt_web_sharing,
             post_command_discovery_hook: options.post_command_discovery_hook,
             client_async_worker_tasks: options.client_async_worker_tasks.map(|v| v as u64),
             visual_bell: options.visual_bell,
@@ -1058,6 +1080,9 @@ impl TryFrom<crate::client_server_contract::client_server_contract::Options>
             web_server_cert: options.web_server_cert.map(std::path::PathBuf::from),
             web_server_key: options.web_server_key.map(std::path::PathBuf::from),
             enforce_https_for_localhost: options.enforce_https_for_localhost,
+            relay_server_url: options.relay_server_url,
+            encrypt_web_sharing: options.encrypt_web_sharing,
+            relay_tunnel_auth_token: None,
             post_command_discovery_hook: options.post_command_discovery_hook,
             client_async_worker_tasks: options.client_async_worker_tasks.map(|v| v as usize),
             visual_bell: options.visual_bell,

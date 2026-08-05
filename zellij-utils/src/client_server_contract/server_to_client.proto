@@ -24,6 +24,7 @@ message ServerToClientMsg {
     SetSoftKeyboardMsg set_soft_keyboard = 17;
     EmitNestedSessionFrameMsg emit_nested_session_frame = 18;
     MobileStateMsg mobile_state = 19;
+    SessionSizeMsg session_size = 20;
   }
 }
 
@@ -158,4 +159,11 @@ message MobileStateMsg {
   repeated MobilePaneMsg panes = 8;
   repeated MobileSessionMsg sessions = 9;
   MobileRenderPrefsMsg render_prefs = 10;
+}
+
+// Delivered to relay-fan-out virtual watchers so the multiplexer can push
+// the current session-viewport size out to the relay.
+message SessionSizeMsg {
+  uint32 rows = 1;
+  uint32 cols = 2;
 }

@@ -9,8 +9,8 @@ version.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-zellij-client = { path = "../zellij-client", version = "0.45.0" }
-zellij-server = { path = "../zellij-server", version = "0.45.0" }
+zellij-client = { workspace = true, features = ["web_server_capability"] }
+zellij-server = { workspace = true, features = ["web_server_capability"] }
 zellij-utils = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
@@ -23,4 +23,12 @@ tokio = { workspace = true }
 vte = { workspace = true }
 
 [dev-dependencies]
+zellij-relay-server = { path = "../zellij-relay-server" }
+zellij-relay-client = { workspace = true, features = ["tunnel"] }
+zellij-relay-protocol = { workspace = true }
+zellij-browser-bridge = { workspace = true }
+axum = { version = "0.8.4", features = ["ws"] }
+futures-util = "0.3"
+serial_test = "3.0"
 tempfile = { workspace = true }
+uuid = { workspace = true }

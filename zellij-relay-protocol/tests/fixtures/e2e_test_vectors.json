@@ -1,0 +1,18 @@
+{
+  "pake_key_utf8": "cross-language-pake-key",
+  "tunnel_id": "tunnel-xlang",
+  "client_id": 3,
+  "frame_type": "C",
+  "direction": ">",
+  "seq": 1,
+  "plaintext_utf8": "hello cross-language",
+  "derive_frame_key_hex": "f06a4e2c85ad1937523ffa3b8839433c8328baaa68760aef3f769d56fa7680fb",
+  "encrypt_seq_hex": "7a6532650000000000000001f7eb8d4bc82b601c383bb7049ec4db2fd1c2a2b9079c3c1add367c5e46a79a567b91565a",
+  "sas_viewer_msg_utf8": "viewer-handshake-msg",
+  "sas_sharer_msg_utf8": "sharer-handshake-msg",
+  "sas_digits": "613181",
+  "device_seed_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "device_challenge_hex": "a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0",
+  "device_pubkey_hex": "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
+  "device_signature_hex": "06613e52107ebcb63c0c43a66974fa49ea2fa0fb1c97d831c63393b9b5a7734ef7adb016d38a6d55d566b29344872da5e2b461b09a34473df131e1b988d7e70a"
+}

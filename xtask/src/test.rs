@@ -18,6 +18,9 @@ pub fn test(sh: &Shell, flags: flags::Test) -> anyhow::Result<()> {
             plugins_only: true,
             no_web: flags.no_web,
             args: vec![],
+            wasm_clip: false,
+            app_origin: None,
+            app_host: None,
         },
     )
     .context(err_context)?;

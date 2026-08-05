@@ -33,6 +33,9 @@ pub use super::generated_api::api::{
         StyledText as ProtobufStyledText, StyledTextIndices as ProtobufStyledTextIndices,
         SyntaxError as ProtobufSyntaxError, TabInfo as ProtobufTabInfo,
         TabMetadata as ProtobufTabMetadata, UserActionPayload as ProtobufUserActionPayload,
+        RelayFailureReason as ProtobufRelayFailureReason,
+        RelayShareState as ProtobufRelayShareState,
+        RelayShareStatus as ProtobufRelayShareStatus,
         WebServerStatusPayload as ProtobufWebServerStatusPayload, WebSharing as ProtobufWebSharing,
         *,
     },
@@ -45,7 +48,8 @@ use crate::data::{
     ClientId, ClientInfo, CopyDestination, Event, EventType, FileMetadata, HostTerminalThemeMode,
     InputMode, KeyWithModifier, LayoutInfo, LayoutMetadata, ModeInfo, Mouse, PaneContents, PaneId,
     PaneInfo, PaneManifest, PaneMetadata, PaneScrollbackResponse, PermissionStatus,
-    PluginCapabilities, PluginInfo, SelectedText, SessionInfo, Style, StyledText, TabInfo,
+    PluginCapabilities, PluginInfo, RelayFailureReason, RelayShareStatus, SelectedText,
+    SessionInfo, Style, StyledText, TabInfo,
     TabMetadata, WebServerStatus, WebSharing,
 };
 
@@ -2025,6 +2029,9 @@ impl TryFrom<ProtobufModeUpdatePayload> for ModeInfo {
             .iter()
             .filter_map(|key| KeyWithModifier::from_str(key).ok())
             .collect();
+        let relay_share_status = protobuf_mode_update_payload
+            .relay_share_status
+            .and_then(|s| RelayShareStatus::try_from(s).ok());
 
         let mode_info = ModeInfo {
             mode: current_mode,
@@ -2049,6 +2056,7 @@ impl TryFrom<ProtobufModeUpdatePayload> for ModeInfo {
             nested_ascend_keys,
             session_ascended,
             nested_descend_keys,
+            relay_share_status,
         };
         Ok(mode_info)
     }
@@ -2091,6 +2099,9 @@ impl TryFrom<ModeInfo> for ProtobufModeUpdatePayload {
             .iter()
             .map(|key| key.to_kdl())
             .collect();
+        let relay_share_status = mode_info
+            .relay_share_status
+            .map(ProtobufRelayShareStatus::from);
         let mut protobuf_input_mode_keybinds: Vec<ProtobufInputModeKeybinds> = vec![];
         for (input_mode, input_mode_keybinds) in mode_info.keybinds {
             let mode: ProtobufInputMode = input_mode.try_into()?;
@@ -2138,7 +2149,109 @@ impl TryFrom<ModeInfo> for ProtobufModeUpdatePayload {
             nested_ascend_keys,
             session_ascended,
             nested_descend_keys,
+            relay_share_status,
         })
+    }
+}
+
+impl TryFrom<ProtobufRelayShareStatus> for RelayShareStatus {
+    type Error = &'static str;
+    fn try_from(payload: ProtobufRelayShareStatus) -> Result<Self, &'static str> {
+        let state = ProtobufRelayShareState::from_i32(payload.state)
+            .ok_or("invalid relay share state")?;
+        match state {
+            ProtobufRelayShareState::Connected => Ok(RelayShareStatus::Connected {
+                url: payload.url,
+            }),
+            ProtobufRelayShareState::Reconnecting => Ok(RelayShareStatus::Reconnecting {
+                attempt: payload.attempt.unwrap_or_default(),
+            }),
+            ProtobufRelayShareState::Failed => {
+                let reason = match payload
+                    .failure_reason
+                    .and_then(ProtobufRelayFailureReason::from_i32)
+                {
+                    Some(ProtobufRelayFailureReason::AuthRejected) => {
+                        RelayFailureReason::AuthRejected
+                    },
+                    Some(ProtobufRelayFailureReason::ProtocolMismatch) => {
+                        RelayFailureReason::ProtocolMismatch {
+                            supported_min: payload.supported_min.unwrap_or_default(),
+                            supported_max: payload.supported_max.unwrap_or_default(),
+                            offered_version: payload.offered_version.unwrap_or_default(),
+                        }
+                    },
+                    _ => RelayFailureReason::Unreachable,
+                };
+                Ok(RelayShareStatus::Failed {
+                    reason,
+                    message: payload.message.unwrap_or_default(),
+                })
+            },
+        }
+    }
+}
+
+impl From<RelayShareStatus> for ProtobufRelayShareStatus {
+    fn from(status: RelayShareStatus) -> Self {
+        match status {
+            RelayShareStatus::Connected { url } => ProtobufRelayShareStatus {
+                state: ProtobufRelayShareState::Connected as i32,
+                url,
+                attempt: None,
+                message: None,
+                failure_reason: None,
+                supported_min: None,
+                supported_max: None,
+                offered_version: None,
+            },
+            RelayShareStatus::Reconnecting { attempt } => ProtobufRelayShareStatus {
+                state: ProtobufRelayShareState::Reconnecting as i32,
+                url: None,
+                attempt: Some(attempt),
+                message: None,
+                failure_reason: None,
+                supported_min: None,
+                supported_max: None,
+                offered_version: None,
+            },
+            RelayShareStatus::Failed { reason, message } => {
+                let (failure_reason, supported_min, supported_max, offered_version) = match reason {
+                    RelayFailureReason::AuthRejected => (
+                        ProtobufRelayFailureReason::AuthRejected as i32,
+                        None,
+                        None,
+                        None,
+                    ),
+                    RelayFailureReason::ProtocolMismatch {
+                        supported_min,
+                        supported_max,
+                        offered_version,
+                    } => (
+                        ProtobufRelayFailureReason::ProtocolMismatch as i32,
+                        Some(supported_min),
+                        Some(supported_max),
+                        Some(offered_version),
+                    ),
+                    RelayFailureReason::Unreachable => (
+                        ProtobufRelayFailureReason::Unreachable as i32,
+                        None,
+                        None,
+                        None,
+                    ),
+                };
+                ProtobufRelayShareStatus {
+                    state: ProtobufRelayShareState::Failed as i32,
+                    url: None,
+                    attempt: None,
+                    message: Some(message),
+                    failure_reason: Some(failure_reason),
+                    supported_min,
+                    supported_max,
+                    offered_version,
+                }
+            },
+        }
     }
 }
 
@@ -2502,6 +2615,7 @@ fn serialize_mode_update_event_with_non_default_values() {
             KeyWithModifier::new(BareKey::Char('o')).with_ctrl_modifier(),
             KeyWithModifier::new(BareKey::Down),
         ],
+        relay_share_status: None,
     });
     let protobuf_event: ProtobufEvent = mode_update_event.clone().try_into().unwrap();
     let serialized_protobuf_event = protobuf_event.encode_to_vec();
@@ -2512,6 +2626,142 @@ fn serialize_mode_update_event_with_non_default_values() {
         mode_update_event, deserialized_event,
         "Event properly serialized/deserialized without change"
     );
+}
+
+#[test]
+fn serialize_mode_update_event_with_relay_share_status_connected() {
+    use prost::Message;
+    let mode_info = ModeInfo {
+        relay_share_status: Some(RelayShareStatus::Connected {
+            url: Some("ws://rw".to_owned()),
+        }),
+        ..Default::default()
+    };
+    let mode_update_event = Event::ModeUpdate(mode_info);
+    let protobuf_event: ProtobufEvent = mode_update_event.clone().try_into().unwrap();
+    let serialized = protobuf_event.encode_to_vec();
+    let decoded_proto: ProtobufEvent = Message::decode(serialized.as_slice()).unwrap();
+    let decoded_event: Event = decoded_proto.try_into().unwrap();
+    match decoded_event {
+        Event::ModeUpdate(info) => {
+            assert_eq!(
+                info.relay_share_status,
+                Some(RelayShareStatus::Connected {
+                    url: Some("ws://rw".to_owned()),
+                })
+            );
+        },
+        other => panic!("expected ModeUpdate, got {:?}", other),
+    }
+}
+
+#[test]
+fn serialize_mode_update_event_with_relay_share_status_reconnecting() {
+    use prost::Message;
+    let mode_info = ModeInfo {
+        relay_share_status: Some(RelayShareStatus::Reconnecting { attempt: 3 }),
+        ..Default::default()
+    };
+    let mode_update_event = Event::ModeUpdate(mode_info);
+    let protobuf_event: ProtobufEvent = mode_update_event.clone().try_into().unwrap();
+    let serialized = protobuf_event.encode_to_vec();
+    let decoded_proto: ProtobufEvent = Message::decode(serialized.as_slice()).unwrap();
+    let decoded_event: Event = decoded_proto.try_into().unwrap();
+    match decoded_event {
+        Event::ModeUpdate(info) => {
+            assert_eq!(
+                info.relay_share_status,
+                Some(RelayShareStatus::Reconnecting { attempt: 3 })
+            );
+        },
+        other => panic!("expected ModeUpdate, got {:?}", other),
+    }
+}
+
+#[test]
+fn serialize_mode_update_event_with_relay_share_status_failed() {
+    use prost::Message;
+    let mode_info = ModeInfo {
+        relay_share_status: Some(RelayShareStatus::Failed {
+            reason: RelayFailureReason::AuthRejected,
+            message: "relay tunnel auth rejected".to_owned(),
+        }),
+        ..Default::default()
+    };
+    let mode_update_event = Event::ModeUpdate(mode_info);
+    let protobuf_event: ProtobufEvent = mode_update_event.clone().try_into().unwrap();
+    let serialized = protobuf_event.encode_to_vec();
+    let decoded_proto: ProtobufEvent = Message::decode(serialized.as_slice()).unwrap();
+    let decoded_event: Event = decoded_proto.try_into().unwrap();
+    match decoded_event {
+        Event::ModeUpdate(info) => {
+            assert_eq!(
+                info.relay_share_status,
+                Some(RelayShareStatus::Failed {
+                    reason: RelayFailureReason::AuthRejected,
+                    message: "relay tunnel auth rejected".to_owned(),
+                })
+            );
+        },
+        other => panic!("expected ModeUpdate, got {:?}", other),
+    }
+}
+
+#[test]
+fn serialize_mode_update_event_with_relay_share_status_protocol_mismatch() {
+    use prost::Message;
+    let mode_info = ModeInfo {
+        relay_share_status: Some(RelayShareStatus::Failed {
+            reason: RelayFailureReason::ProtocolMismatch {
+                supported_min: 1,
+                supported_max: 2,
+                offered_version: 5,
+            },
+            message: "protocol mismatch".to_owned(),
+        }),
+        ..Default::default()
+    };
+    let mode_update_event = Event::ModeUpdate(mode_info);
+    let protobuf_event: ProtobufEvent = mode_update_event.clone().try_into().unwrap();
+    let serialized = protobuf_event.encode_to_vec();
+    let decoded_proto: ProtobufEvent = Message::decode(serialized.as_slice()).unwrap();
+    let decoded_event: Event = decoded_proto.try_into().unwrap();
+    match decoded_event {
+        Event::ModeUpdate(info) => {
+            assert_eq!(
+                info.relay_share_status,
+                Some(RelayShareStatus::Failed {
+                    reason: RelayFailureReason::ProtocolMismatch {
+                        supported_min: 1,
+                        supported_max: 2,
+                        offered_version: 5,
+                    },
+                    message: "protocol mismatch".to_owned(),
+                })
+            );
+        },
+        other => panic!("expected ModeUpdate, got {:?}", other),
+    }
+}
+
+#[test]
+fn serialize_mode_update_event_with_relay_share_status_none() {
+    use prost::Message;
+    let mode_info = ModeInfo {
+        relay_share_status: None,
+        ..Default::default()
+    };
+    let mode_update_event = Event::ModeUpdate(mode_info);
+    let protobuf_event: ProtobufEvent = mode_update_event.clone().try_into().unwrap();
+    let serialized = protobuf_event.encode_to_vec();
+    let decoded_proto: ProtobufEvent = Message::decode(serialized.as_slice()).unwrap();
+    let decoded_event: Event = decoded_proto.try_into().unwrap();
+    match decoded_event {
+        Event::ModeUpdate(info) => {
+            assert_eq!(info.relay_share_status, None);
+        },
+        other => panic!("expected ModeUpdate, got {:?}", other),
+    }
 }
 
 #[test]

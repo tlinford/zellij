@@ -1,0 +1,92 @@
+:root {
+    /* `100vh` is the fallback for browsers without `dvh` support. On
+       iOS Safari this is the *layout* viewport — it includes the
+       URL bar height, so the terminal element would be taller than
+       the visible canvas and xterm.js's grid would be initialised
+       too tall (the keyboard would render below the visible area).
+       The `@supports` block below upgrades to `100dvh` (dynamic
+       viewport) on every modern browser, which automatically tracks
+       URL-bar / soft-keyboard occlusion. The runtime
+       `updateViewportVars` handler still overrides `--dynamic-vh`
+       from `visualViewport.height` when pinch / visualViewport
+       resize events fire. */
+    --dynamic-vh: 100vh;
+    --dynamic-vw: 100vw;
+}
+
+@supports (height: 100dvh) {
+    :root {
+        --dynamic-vh: 100dvh;
+        --dynamic-vw: 100dvw;
+    }
+}
+
+html,
+body {
+    height: var(--dynamic-vh, 100vh);
+    width: var(--dynamic-vw, 100vw);
+    margin: 0;
+    overflow: hidden;
+    background: #000; /* TODO: this should be embedded as the user's theme background */
+}
+
+#terminal {
+    height: var(--dynamic-vh, 100vh);
+    width: var(--dynamic-vw, 100vw);
+    margin: 0;
+    overflow: hidden;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
+    background: #000;
+}
+
+#zellij-native-promote {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    padding: 0.4rem 0.75rem;
+    font-family: monospace;
+    font-size: 0.85rem;
+    color: #e6e6e6;
+    background: #1b1b1b;
+    border-bottom: 1px solid #3a3a3a;
+}
+
+#zellij-native-promote .znp-label {
+    font-weight: bold;
+}
+
+#zellij-native-promote .znp-cmd {
+    padding: 0.1rem 0.35rem;
+    background: #000;
+    border: 1px solid #3a3a3a;
+    border-radius: 3px;
+    user-select: all;
+    white-space: nowrap;
+    overflow-x: auto;
+    max-width: 100%;
+}
+
+#zellij-native-promote .znp-note {
+    color: #9aa0a6;
+}
+
+#zellij-native-promote .znp-copy,
+#zellij-native-promote .znp-dismiss {
+    cursor: pointer;
+    color: #e6e6e6;
+    background: #2a2a2a;
+    border: 1px solid #3a3a3a;
+    border-radius: 3px;
+    padding: 0.1rem 0.5rem;
+}
+
+#zellij-native-promote .znp-dismiss {
+    margin-left: auto;
+}

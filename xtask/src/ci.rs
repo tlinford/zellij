@@ -56,6 +56,9 @@ fn e2e_build(sh: &Shell) -> anyhow::Result<()> {
             plugins_only: true,
             no_web: false,
             args: vec![],
+            wasm_clip: false,
+            app_origin: None,
+            app_host: None,
         },
     )
     .context(err_context)?;
@@ -157,6 +160,9 @@ fn build_release(sh: &Shell, no_web: bool) -> anyhow::Result<()> {
             plugins_only: true,
             no_web,
             args: vec![],
+            wasm_clip: false,
+            app_origin: None,
+            app_host: None,
         },
     )
     .context(err_context)?;
@@ -246,6 +252,9 @@ fn cross_compile(sh: &Shell, target: &OsString, no_web: bool) -> anyhow::Result<
             plugins_only: true,
             no_web,
             args: vec![],
+            wasm_clip: false,
+            app_origin: None,
+            app_host: None,
         },
     )
     .with_context(err_context)?;

@@ -43,6 +43,8 @@ uuid = { workspace = true }
 vte = { workspace = true }
 wasmi_wasi = { version = "1.1.0" }
 zellij-utils = { workspace = true }
+zellij-browser-bridge = { workspace = true, optional = true }
+zellij-relay-client = { workspace = true, optional = true, features = ["tunnel"] }
 once_cell = "1.19"
 num_cpus = { workspace = true }
 
@@ -74,4 +76,4 @@ tempfile = "3.2.0"
 wasmi = { version = "1.1.0", features = ["std"] }
 
 [features]
-web_server_capability = ["zellij-utils/web_server_capability"]
+web_server_capability = ["zellij-utils/web_server_capability", "dep:zellij-browser-bridge", "dep:zellij-relay-client"]

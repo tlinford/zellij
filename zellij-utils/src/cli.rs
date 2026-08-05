@@ -362,6 +362,13 @@ pub enum Sessions {
         #[clap(long, value_parser)]
         forget: bool,
 
+        #[clap(
+            long,
+            value_parser,
+            help = "Replace the stored relay TLS key pin with the currently-presented key (after normal validation)"
+        )]
+        repin: bool,
+
         /// Path to a custom CA certificate (PEM format) for verifying the remote server
         #[clap(long, value_name = "FILE", value_parser)]
         ca_cert: Option<PathBuf>,

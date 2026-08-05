@@ -41,7 +41,13 @@ use zellij_utils::plugin_api::plugin_command::{
     ProtobufOpenTerminalPaneInPlaceOfPaneIdResponse, ProtobufOpenTerminalResponse,
     ProtobufParseLayoutResponse, ProtobufPluginCommand, ProtobufRenameLayoutResponse,
     ProtobufSaveLayoutResponse, ProtobufSaveSessionResponse, ProtobufShowFloatingPanesResponse,
+    RelayListDevicesResponse, RelayListGuestLinksResponse, RelayListPendingAdmissionsResponse,
+    RelayMintGuestLinkResponse, RelayResolveAdmissionResponse, RelayRevokeDeviceResponse,
+    RelayRevokeGuestLinkResponse,
     RenameWebTokenResponse, RevokeAllWebTokensResponse, RevokeTokenResponse,
+};
+use zellij_utils::plugin_api::generated_api::api::plugin_command::{
+    DeviceScope as ProtobufDeviceScope, DeviceStorageLevel as ProtobufDeviceStorageLevel,
 };
 use zellij_utils::plugin_api::plugin_ids::{ProtobufPluginIds, ProtobufZellijVersion};
 
@@ -2631,6 +2637,198 @@ pub fn stop_sharing_current_session() {
     let protobuf_plugin_command: ProtobufPluginCommand = plugin_command.try_into().unwrap();
     object_to_stdout(&protobuf_plugin_command.encode_to_vec());
     unsafe { host_run_plugin_command() };
+}
+
+pub fn share_current_session_to_relay() {
+    let plugin_command = PluginCommand::ShareCurrentSessionToRelay;
+    let protobuf_plugin_command: ProtobufPluginCommand = plugin_command.try_into().unwrap();
+    object_to_stdout(&protobuf_plugin_command.encode_to_vec());
+    unsafe { host_run_plugin_command() };
+}
+
+pub fn stop_sharing_current_session_from_relay() {
+    let plugin_command = PluginCommand::StopSharingCurrentSessionFromRelay;
+    let protobuf_plugin_command: ProtobufPluginCommand = plugin_command.try_into().unwrap();
+    object_to_stdout(&protobuf_plugin_command.encode_to_vec());
+    unsafe { host_run_plugin_command() };
+}
+
+/// Persist a relay tunnel-auth token into the sharer's runtime config.
+/// Empty string clears the configured token. Requires the plugin to hold
+/// `PermissionType::StartWebServer`.
+pub fn set_relay_tunnel_auth_token(token: String) {
+    let plugin_command = PluginCommand::SetRelayTunnelAuthToken(token);
+    let protobuf_plugin_command: ProtobufPluginCommand = plugin_command.try_into().unwrap();
+    object_to_stdout(&protobuf_plugin_command.encode_to_vec());
+    unsafe { host_run_plugin_command() };
+}
+
+pub fn relay_mint_guest_link(
+    read_only: bool,
+    label: String,
+    enroll: bool,
+) -> Result<GuestLink, String> {
+    let plugin_command = PluginCommand::RelayMintGuestLink {
+        read_only,
+        label,
+        enroll,
+    };
+    let protobuf_plugin_command: ProtobufPluginCommand = plugin_command.try_into().unwrap();
+    object_to_stdout(&protobuf_plugin_command.encode_to_vec());
+    unsafe { host_run_plugin_command() };
+    let response = RelayMintGuestLinkResponse::decode(bytes_from_stdin().unwrap().as_slice())
+        .map_err(|e| e.to_string())?;
+    if let Some(error) = response.error {
+        Err(error)
+    } else if let Some(link) = response.link {
+        Ok(GuestLink {
+            link_id: link.link_id,
+            label: link.label,
+            read_only: link.read_only,
+            enroll: link.enroll,
+            url: link.url,
+            spent: link.spent,
+            active: link.active,
+        })
+    } else {
+        Err("empty mint response".to_owned())
+    }
+}
+
+pub fn relay_revoke_guest_link(link_id: Vec<u8>) -> Result<(), String> {
+    let plugin_command = PluginCommand::RelayRevokeGuestLink { link_id };
+    let protobuf_plugin_command: ProtobufPluginCommand = plugin_command.try_into().unwrap();
+    object_to_stdout(&protobuf_plugin_command.encode_to_vec());
+    unsafe { host_run_plugin_command() };
+    let response = RelayRevokeGuestLinkResponse::decode(bytes_from_stdin().unwrap().as_slice())
+        .map_err(|e| e.to_string())?;
+    if let Some(error) = response.error {
+        Err(error)
+    } else {
+        Ok(())
+    }
+}
+
+pub fn relay_list_guest_links() -> Result<Vec<GuestLink>, String> {
+    let plugin_command = PluginCommand::RelayListGuestLinks;
+    let protobuf_plugin_command: ProtobufPluginCommand = plugin_command.try_into().unwrap();
+    object_to_stdout(&protobuf_plugin_command.encode_to_vec());
+    unsafe { host_run_plugin_command() };
+    let response = RelayListGuestLinksResponse::decode(bytes_from_stdin().unwrap().as_slice())
+        .map_err(|e| e.to_string())?;
+    if let Some(error) = response.error {
+        Err(error)
+    } else {
+        Ok(response
+            .links
+            .into_iter()
+            .map(|link| GuestLink {
+                link_id: link.link_id,
+                label: link.label,
+                read_only: link.read_only,
+                enroll: link.enroll,
+                url: link.url,
+                spent: link.spent,
+                active: link.active,
+            })
+            .collect())
+    }
+}
+
+pub fn relay_list_pending_admissions() -> Result<Vec<PendingAdmission>, String> {
+    let plugin_command = PluginCommand::RelayListPendingAdmissions;
+    let protobuf_plugin_command: ProtobufPluginCommand = plugin_command.try_into().unwrap();
+    object_to_stdout(&protobuf_plugin_command.encode_to_vec());
+    unsafe { host_run_plugin_command() };
+    let response =
+        RelayListPendingAdmissionsResponse::decode(bytes_from_stdin().unwrap().as_slice())
+            .map_err(|e| e.to_string())?;
+    if let Some(error) = response.error {
+        Err(error)
+    } else {
+        Ok(response
+            .admissions
+            .into_iter()
+            .map(|a| PendingAdmission {
+                client_id: a.client_id,
+                sas: a.sas,
+                label: a.label,
+                read_only: a.read_only,
+                claimed_name: a.claimed_name,
+                contested: a.contested,
+                seconds_remaining: a.seconds_remaining,
+            })
+            .collect())
+    }
+}
+
+pub fn relay_resolve_admission(
+    client_id: u32,
+    admit: bool,
+    code_confirmed: bool,
+) -> Result<(), String> {
+    let plugin_command = PluginCommand::RelayResolveAdmission {
+        client_id,
+        admit,
+        code_confirmed,
+    };
+    let protobuf_plugin_command: ProtobufPluginCommand = plugin_command.try_into().unwrap();
+    object_to_stdout(&protobuf_plugin_command.encode_to_vec());
+    unsafe { host_run_plugin_command() };
+    let response = RelayResolveAdmissionResponse::decode(bytes_from_stdin().unwrap().as_slice())
+        .map_err(|e| e.to_string())?;
+    if let Some(error) = response.error {
+        Err(error)
+    } else {
+        Ok(())
+    }
+}
+
+pub fn relay_list_devices() -> Result<Vec<EnrolledDevice>, String> {
+    let plugin_command = PluginCommand::RelayListDevices;
+    let protobuf_plugin_command: ProtobufPluginCommand = plugin_command.try_into().unwrap();
+    object_to_stdout(&protobuf_plugin_command.encode_to_vec());
+    unsafe { host_run_plugin_command() };
+    let response = RelayListDevicesResponse::decode(bytes_from_stdin().unwrap().as_slice())
+        .map_err(|e| e.to_string())?;
+    if let Some(error) = response.error {
+        Err(error)
+    } else {
+        Ok(response
+            .devices
+            .into_iter()
+            .map(|d| EnrolledDevice {
+                device_id: d.device_id,
+                label: d.label,
+                read_only: d.read_only,
+                scope: match ProtobufDeviceScope::from_i32(d.scope) {
+                    Some(ProtobufDeviceScope::Host) => DeviceScope::Host,
+                    _ => DeviceScope::Session,
+                },
+                last_used: d.last_used,
+                storage_level: match ProtobufDeviceStorageLevel::from_i32(d.storage_level) {
+                    Some(ProtobufDeviceStorageLevel::FilePermsOnly) | None => {
+                        DeviceStorageLevel::FilePermsOnly
+                    },
+                },
+                connected: d.connected,
+            })
+            .collect())
+    }
+}
+
+pub fn relay_revoke_device(device_id: Vec<u8>) -> Result<(), String> {
+    let plugin_command = PluginCommand::RelayRevokeDevice { device_id };
+    let protobuf_plugin_command: ProtobufPluginCommand = plugin_command.try_into().unwrap();
+    object_to_stdout(&protobuf_plugin_command.encode_to_vec());
+    unsafe { host_run_plugin_command() };
+    let response = RelayRevokeDeviceResponse::decode(bytes_from_stdin().unwrap().as_slice())
+        .map_err(|e| e.to_string())?;
+    if let Some(error) = response.error {
+        Err(error)
+    } else {
+        Ok(())
+    }
 }
 
 pub fn group_and_ungroup_panes(

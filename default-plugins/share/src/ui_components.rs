@@ -615,6 +615,148 @@ impl CurrentSessionSection {
     }
 }
 
+const DISPLAY_WARNING: &str = "This link contains a secret. Consider copying it directly to your clipboard instead of displaying it first.";
+const WARNING_TITLE: &str = "Warning";
+
+const DISPLAY_HELP_WIDE: &str = "<d> - Display anyway, <c> - Copy to clipboard, <ESC> - back";
+const DISPLAY_HELP_MED: &str = "<d> - Display, <c> - Copy, <ESC> - back";
+const DISPLAY_HELP_NARROW: &str = "<d>/<c>/<ESC>";
+
+const REVEALED_HELP_WIDE: &str = "<c> - Copy to clipboard, <ESC> - back";
+const REVEALED_HELP_MED: &str = "<c> - Copy, <ESC> - back";
+const REVEALED_HELP_NARROW: &str = "<c>/<ESC>";
+
+fn display_help_texts(revealed: bool) -> (&'static str, &'static str, &'static str) {
+    if revealed {
+        (REVEALED_HELP_WIDE, REVEALED_HELP_MED, REVEALED_HELP_NARROW)
+    } else {
+        (DISPLAY_HELP_WIDE, DISPLAY_HELP_MED, DISPLAY_HELP_NARROW)
+    }
+}
+
+fn display_help_tier(available_cols: usize, revealed: bool) -> usize {
+    let (wide, med, _narrow) = display_help_texts(revealed);
+    if available_cols >= wide.chars().count() {
+        2
+    } else if available_cols >= med.chars().count() {
+        1
+    } else {
+        0
+    }
+}
+
+fn display_help_width(available_cols: usize, revealed: bool) -> usize {
+    let (wide, med, narrow) = display_help_texts(revealed);
+    match display_help_tier(available_cols, revealed) {
+        2 => wide.chars().count(),
+        1 => med.chars().count(),
+        _ => narrow.chars().count(),
+    }
+}
+
+fn render_display_help(base_x: usize, y: usize, tier: usize, revealed: bool) {
+    let (wide, med, narrow) = display_help_texts(revealed);
+    let text = match tier {
+        2 => wide,
+        1 => med,
+        _ => narrow,
+    };
+    let styled = Text::new(text)
+        .color_substring(3, "<d>")
+        .color_substring(3, "<c>")
+        .color_substring(3, "<ESC>");
+    print_text_with_coordinates(styled, base_x, y, None, None);
+}
+
+/// Shared warning/reveal sub-screen for secret-bearing links (guest links and
+/// device-enrollment links). `title_prefix` is the coloured prefix shown before
+/// the link label once revealed (e.g. `"Guest link:"` or `"Enrollment link:"`).
+pub fn render_secret_link_screen(
+    rows: usize,
+    cols: usize,
+    title_prefix: &str,
+    label: &str,
+    url: &str,
+    revealed: bool,
+    hover_coordinates: Option<(usize, usize)>,
+    clickable_urls: &mut HashMap<CoordinatesInLine, String>,
+) {
+    let available_cols = cols.saturating_sub(2);
+
+    let display_title = if revealed {
+        format!("{} {}", title_prefix, label)
+    } else {
+        WARNING_TITLE.to_owned()
+    };
+    let title_w = display_title.chars().count();
+    let help_tier = display_help_tier(available_cols, revealed);
+    let help_w = display_help_width(available_cols, revealed);
+
+    let body_source_w = if revealed { url.chars().count() } else { help_w };
+
+    let max_w = title_w.max(help_w).max(body_source_w);
+    let effective_width = max_w.max(1).min(available_cols);
+    let base_x = available_cols.saturating_sub(effective_width) / 2;
+
+    let wrap_width = if revealed { effective_width } else { help_w.max(1) };
+    let body_wrapped = if revealed {
+        crate::online_tab::word_wrap(url, wrap_width)
+    } else {
+        crate::online_tab::word_wrap(DISPLAY_WARNING, wrap_width)
+    };
+    let body_lines = body_wrapped.len();
+
+    let total_height = 1 + 1 + body_lines + 1 + 1;
+    let base_y = rows.saturating_sub(total_height.min(rows)) / 2;
+
+    let title_y = base_y;
+    let body_start_y = base_y + 2;
+    let help_y = body_start_y + body_lines + 1;
+
+    if revealed {
+        let prefix_len = title_prefix.chars().count();
+        let name_start = prefix_len + 1;
+        let name_end = name_start + label.chars().count();
+        let title_text = Text::new(&display_title)
+            .color_range(2, 0..prefix_len)
+            .color_range(1, name_start..name_end);
+        print_text_with_coordinates(title_text, base_x, title_y, None, None);
+    } else {
+        print_text_with_coordinates(
+            Text::new(&display_title).error_color_all(),
+            base_x,
+            title_y,
+            None,
+            None,
+        );
+    }
+
+    let mut y = body_start_y;
+    for line in &body_wrapped {
+        if y >= rows.saturating_sub(1) {
+            break;
+        }
+        if revealed {
+            let line_width = line.chars().count();
+            print_text_with_coordinates(Text::new(line), base_x, y, None, None);
+            clickable_urls.insert(
+                CoordinatesInLine::new(base_x, y, line_width),
+                url.to_owned(),
+            );
+            if hovering_on_line(base_x, y, line_width, hover_coordinates) {
+                render_text_with_underline(base_x, y, line);
+            }
+        } else {
+            print_text_with_coordinates(Text::new(line), base_x, y, None, None);
+        }
+        y += 1;
+    }
+
+    if help_y < rows {
+        render_display_help(base_x, help_y, help_tier, revealed);
+    }
+}
+
 pub fn hovering_on_line(
     x: usize,
     y: usize,

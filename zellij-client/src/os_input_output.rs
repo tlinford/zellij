@@ -338,6 +338,34 @@ impl Clone for Box<dyn ClientOsApi> {
     }
 }
 
+#[cfg(feature = "web_server_capability")]
+impl zellij_browser_bridge::SessionLink for ClientOsInputOutput {
+    fn send_to_server(&self, msg: ClientToServerMsg) {
+        ClientOsApi::send_to_server(self, msg)
+    }
+    fn recv_from_server(&self) -> Option<(ServerToClientMsg, ErrorContext)> {
+        ClientOsApi::recv_from_server(self)
+    }
+    fn connect_to_server(&self, path: &Path) {
+        ClientOsApi::connect_to_server(self, path)
+    }
+    fn get_terminal_size(&self) -> Size {
+        ClientOsApi::get_terminal_size(self)
+    }
+    fn load_palette(&self) -> Palette {
+        ClientOsApi::load_palette(self)
+    }
+    fn update_session_name(&mut self, new_session_name: String) {
+        ClientOsApi::update_session_name(self, new_session_name)
+    }
+    fn spawn_server(&self, socket_path: &Path, debug: bool) -> Result<(), std::io::Error> {
+        ClientOsApi::spawn_server(self, socket_path, debug)
+    }
+    fn box_clone(&self) -> Box<dyn zellij_browser_bridge::SessionLink> {
+        Box::new((*self).clone())
+    }
+}
+
 pub fn get_client_os_input() -> Result<ClientOsInputOutput, std::io::Error> {
     let reading_from_stdin = Arc::new(Mutex::new(None));
     Ok(ClientOsInputOutput {

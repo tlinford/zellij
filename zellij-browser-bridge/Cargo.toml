@@ -1,0 +1,16 @@
+[package]
+name = "zellij-browser-bridge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Bridge an external transport into a running Zellij session"
+
+[dependencies]
+zellij-utils = { workspace = true }
+anyhow = { workspace = true }
+log = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+uuid = { workspace = true }

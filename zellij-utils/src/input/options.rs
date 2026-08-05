@@ -366,6 +366,29 @@ pub struct Options {
     pub web_server_cert: Option<PathBuf>,
     pub web_server_key: Option<PathBuf>,
     pub enforce_https_for_localhost: Option<bool>,
+    /// WebSocket URL of the Zellij relay that "Share to Internet" tunnels to
+    /// (e.g. `ws://localhost:8765` for local development, or
+    /// `wss://relay.zellij.dev` in production). When `None`, the relay
+    /// tunnel falls back to the built-in default `wss://zellij.online`.
+    #[clap(long, value_parser)]
+    #[serde(default)]
+    pub relay_server_url: Option<String>,
+    /// Whether to end-to-end encrypt traffic from the local Zellij web
+    /// server to web clients. Relay-path sharing is always E2E-encrypted
+    /// regardless of this option — this flag only controls the local web
+    /// path (any bind address). Default: off.
+    ///
+    /// Note: E2E encryption is a defence-in-depth measure on top of TLS.
+    /// It protects against passive eavesdropping and trusted-but-curious
+    /// intermediaries. An active LAN-level MITM on a plain-HTTP Zellij
+    /// web server can still downgrade the client — use `web_server_cert`
+    /// / `web_server_key` if that is a concern.
+    #[clap(long, value_parser)]
+    #[serde(default)]
+    pub encrypt_web_sharing: Option<bool>,
+    #[clap(skip)]
+    #[serde(skip)]
+    pub relay_tunnel_auth_token: Option<String>,
     /// A command to run after the discovery of running commands when serializing, for the purpose
     /// of manipulating the command (eg. with a regex) before it gets serialized
     #[clap(long, value_parser)]
@@ -490,6 +513,15 @@ impl Options {
         let enforce_https_for_localhost = other
             .enforce_https_for_localhost
             .or(self.enforce_https_for_localhost);
+        let relay_server_url = other
+            .relay_server_url
+            .or_else(|| self.relay_server_url.clone());
+        let encrypt_web_sharing = other
+            .encrypt_web_sharing
+            .or(self.encrypt_web_sharing);
+        let relay_tunnel_auth_token = other
+            .relay_tunnel_auth_token
+            .or_else(|| self.relay_tunnel_auth_token.clone());
         let post_command_discovery_hook = other
             .post_command_discovery_hook
             .or(self.post_command_discovery_hook.clone());
@@ -527,6 +559,9 @@ impl Options {
             auto_layout,
             session_serialization,
             serialize_pane_viewport,
+            relay_server_url,
+            encrypt_web_sharing,
+            relay_tunnel_auth_token,
             scrollback_lines_to_serialize,
             styled_underlines,
             serialization_interval,
@@ -639,6 +674,13 @@ impl Options {
         let enforce_https_for_localhost = other
             .enforce_https_for_localhost
             .or(self.enforce_https_for_localhost);
+        let relay_server_url = other
+            .relay_server_url
+            .or_else(|| self.relay_server_url.clone());
+        let encrypt_web_sharing = merge_bool(other.encrypt_web_sharing, self.encrypt_web_sharing);
+        let relay_tunnel_auth_token = other
+            .relay_tunnel_auth_token
+            .or_else(|| self.relay_tunnel_auth_token.clone());
         let post_command_discovery_hook = other
             .post_command_discovery_hook
             .or_else(|| self.post_command_discovery_hook.clone());
@@ -699,6 +741,9 @@ impl Options {
             web_server_cert,
             web_server_key,
             enforce_https_for_localhost,
+            relay_server_url,
+            encrypt_web_sharing,
+            relay_tunnel_auth_token,
             post_command_discovery_hook,
             client_async_worker_tasks,
             nested_session_handling,
@@ -714,9 +759,208 @@ impl Options {
     }
 }
 
+pub fn resolve_relay_tunnel_auth_token(configured: Option<&str>) -> String {
+    use crate::consts::{
+        RELAY_TUNNEL_AUTH_TOKEN_ASKPASS_ENV, RELAY_TUNNEL_AUTH_TOKEN_ENV,
+        RELAY_TUNNEL_AUTH_TOKEN_FILE_ENV,
+    };
+
+    resolve_relay_tunnel_auth_token_from(
+        configured,
+        std::env::var(RELAY_TUNNEL_AUTH_TOKEN_ENV).ok(),
+        std::env::var(RELAY_TUNNEL_AUTH_TOKEN_ASKPASS_ENV).ok(),
+        std::env::var(RELAY_TUNNEL_AUTH_TOKEN_FILE_ENV).ok(),
+        run_relay_tunnel_auth_token_askpass,
+        read_relay_tunnel_auth_token_file,
+    )
+}
+
+fn resolve_relay_tunnel_auth_token_from(
+    configured: Option<&str>,
+    env_literal: Option<String>,
+    askpass: Option<String>,
+    file_path: Option<String>,
+    run: impl Fn(&str) -> Option<String>,
+    read_file: impl Fn(&str) -> Option<String>,
+) -> String {
+    if let Some(token) = configured {
+        if !token.is_empty() {
+            return token.to_owned();
+        }
+    }
+    if let Some(token) = env_literal {
+        if !token.is_empty() {
+            return token;
+        }
+    }
+    if let Some(command) = askpass {
+        if !command.is_empty() {
+            if let Some(output) = run(&command) {
+                let line = output.lines().next().unwrap_or("").trim();
+                if !line.is_empty() {
+                    return line.to_owned();
+                }
+            }
+        }
+    }
+    if let Some(path) = file_path {
+        if !path.is_empty() {
+            if let Some(token) = read_file(&path) {
+                return token;
+            }
+        }
+    }
+    String::new()
+}
+
+fn run_relay_tunnel_auth_token_askpass(command: &str) -> Option<String> {
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout).ok()
+}
+
+fn read_relay_tunnel_auth_token_file(path: &str) -> Option<String> {
+    let contents = match std::fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(e) => {
+            log::error!("failed to read relay tunnel auth token file {}: {}", path, e);
+            return None;
+        },
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(metadata) = std::fs::metadata(path) {
+            let mode = metadata.permissions().mode() & 0o777;
+            if mode & 0o077 != 0 {
+                log::error!(
+                    "refusing relay tunnel auth token file {} with mode {:#o}; tighten to 0600 so other users cannot read the token",
+                    path,
+                    mode
+                );
+                return None;
+            }
+        }
+    }
+    let token = contents.trim();
+    if token.is_empty() {
+        None
+    } else {
+        Some(token.to_owned())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn no_askpass(_: &str) -> Option<String> {
+        panic!("askpass runner should not be invoked");
+    }
+
+    fn no_file(_: &str) -> Option<String> {
+        panic!("file reader should not be invoked");
+    }
+
+    #[test]
+    fn relay_token_in_memory_beats_every_other_source() {
+        let resolved = resolve_relay_tunnel_auth_token_from(
+            Some("in-memory"),
+            Some("env".to_owned()),
+            Some("askpass-cmd".to_owned()),
+            Some("/tmp/token".to_owned()),
+            |_| Some("askpass".to_owned()),
+            |_| Some("file".to_owned()),
+        );
+        assert_eq!(resolved, "in-memory");
+    }
+
+    #[test]
+    fn relay_token_env_beats_askpass_and_file() {
+        let resolved = resolve_relay_tunnel_auth_token_from(
+            None,
+            Some("env".to_owned()),
+            Some("askpass-cmd".to_owned()),
+            Some("/tmp/token".to_owned()),
+            no_askpass,
+            no_file,
+        );
+        assert_eq!(resolved, "env");
+    }
+
+    #[test]
+    fn relay_token_askpass_beats_file_and_is_reduced_to_first_line() {
+        let resolved = resolve_relay_tunnel_auth_token_from(
+            None,
+            None,
+            Some("askpass-cmd".to_owned()),
+            Some("/tmp/token".to_owned()),
+            |_| Some("  first-line  \nsecond".to_owned()),
+            no_file,
+        );
+        assert_eq!(resolved, "first-line");
+    }
+
+    #[test]
+    fn relay_token_empty_tiers_fall_through() {
+        let resolved = resolve_relay_tunnel_auth_token_from(
+            Some(""),
+            Some("".to_owned()),
+            Some("askpass-cmd".to_owned()),
+            Some("/tmp/token".to_owned()),
+            |_| Some("\n".to_owned()),
+            |_| Some("file".to_owned()),
+        );
+        assert_eq!(resolved, "file");
+    }
+
+    #[test]
+    fn relay_token_failed_askpass_falls_through_to_file() {
+        let resolved = resolve_relay_tunnel_auth_token_from(
+            None,
+            None,
+            Some("askpass-cmd".to_owned()),
+            Some("/tmp/token".to_owned()),
+            |_| None,
+            |_| Some("file".to_owned()),
+        );
+        assert_eq!(resolved, "file");
+    }
+
+    #[test]
+    fn relay_token_absent_everywhere_is_empty() {
+        let resolved =
+            resolve_relay_tunnel_auth_token_from(None, None, None, None, no_askpass, no_file);
+        assert_eq!(resolved, "");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn relay_token_file_permission_enforcement() {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("token");
+        let mut file = std::fs::File::create(&path).unwrap();
+        write!(file, "secret\n").unwrap();
+        let path_str = path.to_str().unwrap();
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(read_relay_tunnel_auth_token_file(path_str), None);
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(
+            read_relay_tunnel_auth_token_file(path_str),
+            Some("secret".to_owned())
+        );
+    }
 
     #[test]
     fn pane_frame_style_from_str_accepts_all_variants() {
@@ -737,5 +981,33 @@ mod tests {
             PaneFrameStyle::None
         );
         assert!("bogus".parse::<PaneFrameStyle>().is_err());
+    }
+
+    #[test]
+    fn relay_server_url_cli_overrides_kdl() {
+        let base = Options {
+            relay_server_url: Some("ws://kdl".into()),
+            ..Default::default()
+        };
+        let cli = Options {
+            relay_server_url: Some("ws://cli".into()),
+            ..Default::default()
+        };
+        let merged = base.merge_from_cli(cli);
+        assert_eq!(merged.relay_server_url, Some("ws://cli".into()));
+    }
+
+    #[test]
+    fn relay_server_url_cli_none_preserves_kdl() {
+        let base = Options {
+            relay_server_url: Some("ws://kdl".into()),
+            ..Default::default()
+        };
+        let cli = Options {
+            relay_server_url: None,
+            ..Default::default()
+        };
+        let merged = base.merge_from_cli(cli);
+        assert_eq!(merged.relay_server_url, Some("ws://kdl".into()));
     }
 }

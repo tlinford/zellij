@@ -1,0 +1,16 @@
+{
+  "name": "zellij-web-client-tests",
+  "private": true,
+  "type": "module",
+  "description": "Headless Node tests for the relay browser device path (frozen-core JS).",
+  "scripts": {
+    "test": "node --test --test-reporter=spec"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "^6.0.0",
+    "jsdom": "^24.1.0"
+  }
+}

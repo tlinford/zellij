@@ -18,7 +18,8 @@ use uuid::Uuid;
 use zellij_utils::data::PaneContents;
 use zellij_utils::data::{
     Direction, KeyWithModifier, NewPanePlacement, PaneInfo, PermissionStatus, PermissionType,
-    PluginPermission, RegexHighlight, ResizeStrategy, Style, StyledText, WebSharing,
+    PluginPermission, RegexHighlight, RelayShareStatus, ResizeStrategy, Style, StyledText,
+    WebSharing,
 };
 use zellij_utils::errors::prelude::*;
 use zellij_utils::input::command::RunCommand;
@@ -247,6 +248,7 @@ pub(crate) struct Tab {
     explicitly_disable_kitty_keyboard_protocol: bool,
     web_clients_allowed: bool,
     web_sharing: WebSharing,
+    relay_share_status: Option<RelayShareStatus>,
     mouse_hover_pane_id: HashMap<ClientId, PaneId>,
     dimmed_clients: HashSet<ClientId>,
     plugin_hover_pane_id: HashMap<ClientId, PaneId>,
@@ -997,6 +999,7 @@ impl Tab {
             default_editor,
             web_clients_allowed,
             web_sharing,
+            relay_share_status: None,
             mouse_hover_pane_id: HashMap::new(),
             plugin_hover_pane_id: HashMap::new(),
             mouse_last_pane_id: HashMap::new(),
@@ -2040,6 +2043,7 @@ impl Tab {
             mode_info.editor = self.default_editor.clone();
             mode_info.web_clients_allowed = Some(self.web_clients_allowed);
             mode_info.web_sharing = Some(self.web_sharing);
+            mode_info.relay_share_status = self.relay_share_status.clone();
             mode_info.currently_marking_pane_group =
                 currently_marking_pane_group.get(client_id).copied();
             mode_info.web_server_ip = Some(self.web_server_ip);
@@ -7491,6 +7495,10 @@ impl Tab {
         if old_value != self.web_sharing {
             let _ = self.update_input_modes();
         }
+    }
+    pub fn update_relay_share_status(&mut self, status: Option<RelayShareStatus>) {
+        self.relay_share_status = status;
+        let _ = self.update_input_modes();
     }
     pub fn extract_suppressed_panes(&mut self) -> SuppressedPanes {
         let stack_list_members = &self.stack_list_of_member;

@@ -20,6 +20,8 @@ mod pane_groups;
 mod plugins;
 mod pty;
 mod pty_writer;
+#[cfg(feature = "web_server_capability")]
+mod relay_connections;
 mod route;
 mod screen;
 mod session_layout_metadata;
@@ -53,6 +55,8 @@ use crate::{
     screen::{screen_thread_main, ScreenInstruction},
     thread_bus::{Bus, ThreadSenders},
 };
+#[cfg(feature = "web_server_capability")]
+use crate::relay_connections::{RelayConnection, RelayShareRequest};
 use route::{route_thread_main, NotificationEnd};
 use zellij_utils::{
     channels::{self, ChannelWithContext, SenderWithContext},
@@ -103,6 +107,7 @@ pub enum ServerInstruction {
         ClientId,
     ),
     AttachWatcherClient(ClientId, Size, bool), // bool -> is_web_client
+    AttachRelayWatcherClient(ClientId, bool),  // bool -> is_web_client
     ConnStatus(ClientId),
     Log(Vec<String>, ClientId, Option<NotificationEnd>),
     LogError(Vec<String>, ClientId, Option<NotificationEnd>),
@@ -132,6 +137,12 @@ pub enum ServerInstruction {
     StartWebServer(ClientId),
     ShareCurrentSession(ClientId),
     StopSharingCurrentSession(ClientId),
+    ShareCurrentSessionToRelay(ClientId),
+    StopSharingCurrentSessionFromRelay(ClientId),
+    /// Phase 6 Session C: persist the relay tunnel auth token for this
+    /// client's runtime config. Empty string clears it. Handled by
+    /// writing into `SessionConfiguration` for the client.
+    SetRelayTunnelAuthToken(ClientId, String),
     SendWebClientsForbidden(ClientId),
     WebServerStarted(String), // String -> base_url
     FailedToStartWebServer(String),
@@ -157,6 +168,7 @@ impl From<&ServerInstruction> for ServerContext {
             ServerInstruction::DetachSession(..) => ServerContext::DetachSession,
             ServerInstruction::AttachClient(..) => ServerContext::AttachClient,
             ServerInstruction::AttachWatcherClient(..) => ServerContext::AttachClient,
+            ServerInstruction::AttachRelayWatcherClient(..) => ServerContext::AttachClient,
             ServerInstruction::ConnStatus(..) => ServerContext::ConnStatus,
             ServerInstruction::Log(..) => ServerContext::Log,
             ServerInstruction::LogError(..) => ServerContext::LogError,
@@ -182,6 +194,15 @@ impl From<&ServerInstruction> for ServerContext {
             ServerInstruction::ShareCurrentSession(..) => ServerContext::ShareCurrentSession,
             ServerInstruction::StopSharingCurrentSession(..) => {
                 ServerContext::StopSharingCurrentSession
+            },
+            ServerInstruction::ShareCurrentSessionToRelay(..) => {
+                ServerContext::ShareCurrentSessionToRelay
+            },
+            ServerInstruction::StopSharingCurrentSessionFromRelay(..) => {
+                ServerContext::StopSharingCurrentSessionFromRelay
+            },
+            ServerInstruction::SetRelayTunnelAuthToken(..) => {
+                ServerContext::SetRelayTunnelAuthToken
             },
             ServerInstruction::WebServerStarted(..) => ServerContext::WebServerStarted,
             ServerInstruction::FailedToStartWebServer(..) => ServerContext::FailedToStartWebServer,
@@ -344,7 +365,12 @@ pub(crate) struct SessionMetaData {
     plugin_thread: Option<thread::JoinHandle<()>>,
     pty_writer_thread: Option<thread::JoinHandle<()>>,
     background_jobs_thread: Option<thread::JoinHandle<()>>,
+    #[cfg(feature = "web_server_capability")]
+    relay_connection: Option<RelayConnection>,
     config_file_path: Option<PathBuf>,
+    // True while sharing the session to the relay, in this case session should remain alive even
+    // if there are no clients connected.
+    pub relay_share_active: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl SessionMetaData {
@@ -1226,6 +1252,23 @@ pub fn start_server_impl(
                     ))
                     .unwrap();
             },
+            ServerInstruction::AttachRelayWatcherClient(client_id, is_web_client) => {
+                // Virtual watcher for a relay r/o fan-out group. The terminal size
+                // follows the current session viewport; Screen applies that itself.
+                session_state
+                    .write()
+                    .unwrap()
+                    .convert_client_to_watcher(client_id, is_web_client);
+
+                session_data
+                    .write()
+                    .unwrap()
+                    .as_ref()
+                    .unwrap()
+                    .senders
+                    .send_to_screen(ScreenInstruction::AddRelayWatcherClient(client_id))
+                    .unwrap();
+            },
             ServerInstruction::UnblockInputThread => {
                 let client_ids = session_state.read().unwrap().client_ids();
                 for client_id in client_ids {
@@ -1347,7 +1390,18 @@ pub fn start_server_impl(
                         .senders
                         .send_to_plugin(PluginInstruction::RemoveClient(client_id))
                         .unwrap();
-                    if !session_state.read().unwrap().active_clients_are_connected() {
+                    let relay_share_active = session_data
+                        .read()
+                        .unwrap()
+                        .as_ref()
+                        .map(|s| {
+                            s.relay_share_active
+                                .load(std::sync::atomic::Ordering::Relaxed)
+                        })
+                        .unwrap_or(false);
+                    if !session_state.read().unwrap().active_clients_are_connected()
+                        && !relay_share_active
+                    {
                         *session_data.write().unwrap() = None;
                         let client_ids_to_cleanup: Vec<ClientId> = session_state
                             .read()
@@ -1841,6 +1895,111 @@ pub fn start_server_impl(
                     log::error!("Cannot start web server: this instance of Zellij was compiled without web_server_capability");
                 }
             },
+            ServerInstruction::ShareCurrentSessionToRelay(client_id) => {
+                #[cfg(feature = "web_server_capability")]
+                {
+                    // Relay sharing needs web-sharing on, if a session was explicitly shared to
+                    // the relay (user intent), we should also turn this on
+                    let sharing_ok = session_data
+                        .write()
+                        .ok()
+                        .and_then(|mut s| s.as_mut().map(|s| s.web_sharing.set_sharing()))
+                        .unwrap_or(false);
+                    if sharing_ok {
+                        if let Ok(guard) = session_data.write() {
+                            if let Some(sd) = guard.as_ref() {
+                                let _ = sd.senders.send_to_screen(
+                                    ScreenInstruction::SessionSharingStatusChange(true),
+                                );
+                            }
+                        }
+                    }
+                    if !sharing_ok {
+                        // TODO: error in plugin/cli
+                        log::error!(
+                            "Cannot start relay tunnel: web sharing is disabled by configuration"
+                        );
+                    } else {
+                        let request = session_data
+                            .read()
+                            .ok()
+                            .and_then(|s| {
+                                s.as_ref().map(|s| {
+                                    let cfg = s
+                                        .session_configuration
+                                        .get_client_configuration(&client_id);
+                                    let opts = cfg.options.clone();
+                                    RelayShareRequest {
+                                        relay_url: opts.relay_server_url.clone().unwrap_or_else(
+                                            || {
+                                                zellij_utils::consts::DEFAULT_RELAY_SERVER_URL
+                                                    .to_string()
+                                            },
+                                        ),
+                                        relay_tunnel_auth_token:
+                                            zellij_utils::input::options::resolve_relay_tunnel_auth_token(
+                                                opts.relay_tunnel_auth_token.as_deref(),
+                                            ),
+                                        config: cfg,
+                                        config_options: opts,
+                                        config_file_path: s.config_file_path.clone(),
+                                    }
+                                })
+                            });
+                        if let Some(request) = request {
+                            if let Ok(guard) = session_data.read() {
+                                if let Some(sd) = guard.as_ref() {
+                                    if let Some(relay_connection) = sd.relay_connection.as_ref() {
+                                        relay_connection.start_share(request);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                #[cfg(not(feature = "web_server_capability"))]
+                {
+                    let _ = client_id;
+                    log::error!(
+                        "Cannot start relay tunnel: compiled without web_server_capability"
+                    );
+                }
+            },
+            ServerInstruction::StopSharingCurrentSessionFromRelay(client_id) => {
+                #[cfg(feature = "web_server_capability")]
+                if let Ok(guard) = session_data.read() {
+                    if let Some(sd) = guard.as_ref() {
+                        sd.relay_share_active
+                            .store(false, std::sync::atomic::Ordering::Relaxed);
+                        if let Some(relay_connection) = sd.relay_connection.as_ref() {
+                            relay_connection.stop_share(client_id);
+                        }
+                    }
+                }
+                #[cfg(not(feature = "web_server_capability"))]
+                let _ = client_id;
+            },
+            ServerInstruction::SetRelayTunnelAuthToken(client_id, token) => {
+                // Persist the token into the client's runtime configuration
+                // so the next `ShareCurrentSessionToRelay` pulls it through
+                // via `get_client_configuration`. Empty string clears the
+                // slot. The value is kept in process memory only — the
+                // saved KDL file on disk is not mutated by this path
+                // (users who want persistence can write it there
+                // themselves, mirroring the existing `--relay-server-url`
+                // pattern).
+                if let Ok(mut guard) = session_data.write() {
+                    if let Some(sd) = guard.as_mut() {
+                        let mut config = sd
+                            .session_configuration
+                            .get_client_configuration(&client_id);
+                        config.options.relay_tunnel_auth_token =
+                            if token.is_empty() { None } else { Some(token) };
+                        sd.session_configuration
+                            .set_client_runtime_configuration(client_id, config);
+                    }
+                }
+            },
             ServerInstruction::WebServerStarted(base_url) => {
                 session_data
                     .write()
@@ -2035,6 +2194,8 @@ fn init_session(
         channels::unbounded();
     let to_background_jobs = SenderWithContext::new(to_background_jobs);
 
+    let relay_share_active = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
     // Determine and initialize the data directory
     let data_dir = cli_assets.data_dir.unwrap_or_else(get_default_data_dir);
 
@@ -2220,6 +2381,16 @@ fn init_session(
             }
         })
         .unwrap();
+
+    #[cfg(feature = "web_server_capability")]
+    let relay_connection = RelayConnection::spawn(
+        &to_screen,
+        &to_server,
+        relay_share_active.clone(),
+        envs::get_session_name().unwrap_or_default(),
+        zellij_utils::consts::VERSION.to_string(),
+    );
+
     if let Some(config_file_path) = cli_assets.config_file_path.clone() {
         let layout_dir = config_options
             .layout_dir
@@ -2264,11 +2435,14 @@ fn init_session(
         pty_writer_thread: Some(pty_writer_thread),
         background_jobs_thread: Some(background_jobs_thread),
         #[cfg(feature = "web_server_capability")]
+        relay_connection: Some(relay_connection),
+        #[cfg(feature = "web_server_capability")]
         web_sharing: config.options.web_sharing.unwrap_or(WebSharing::Off),
         #[cfg(not(feature = "web_server_capability"))]
         web_sharing: WebSharing::Disabled,
         key_passthrough_clients: HashMap::new(),
         config_file_path: cli_assets.config_file_path,
+        relay_share_active,
     }
 }
 

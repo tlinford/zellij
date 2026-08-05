@@ -129,10 +129,21 @@ xflags::xflags! {
             optional --no-plugins
             /// Compile without web support
             optional --no-web
+            /// Build only the zellij-ansi-clip wasm blob (for browser r/o viewers).
+            /// Produces target/wasm32-unknown-unknown/release/zellij_ansi_clip.wasm
+            /// and copies it to zellij-web-client-assets/assets/clip.wasm.
+            optional --wasm-clip
+            optional --app-origin out: PathBuf
+            optional --app-host host: String
+
             /// Extra arguments appended to the native `cargo build` invocation
             /// (e.g. `--no-default-features`, `--features ...`, `--offline`, `--locked`, `-j N`).
             /// Not applied to the wasm plugin build.
             repeated args: OsString
+        }
+
+        cmd relay-dev {
+            optional --https-port port: u16
         }
     }
 }
@@ -158,6 +169,7 @@ pub enum XtaskCmd {
     Test(Test),
     IntegrationTest(IntegrationTest),
     Build(Build),
+    RelayDev(RelayDev),
 }
 
 #[derive(Debug)]
@@ -266,6 +278,14 @@ pub struct Build {
     pub plugins_only: bool,
     pub no_plugins: bool,
     pub no_web: bool,
+    pub wasm_clip: bool,
+    pub app_origin: Option<PathBuf>,
+    pub app_host: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct RelayDev {
+    pub https_port: Option<u16>,
 }
 
 impl Xtask {

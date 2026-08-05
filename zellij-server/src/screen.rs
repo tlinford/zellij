@@ -42,9 +42,9 @@ use log::{debug, warn};
 use zellij_utils::data::{
     CommandOrPlugin, Direction, EventType, FloatingPaneCoordinates, GetFocusedPaneInfoResponse,
     HostTerminalThemeMode, KeyWithModifier, LayoutInfo, LayoutWithError, ListPanesResponse,
-    ListTabsResponse, NewPanePlacement, PaneContents, PaneInfo, PaneListEntry, PaneManifest,
-    PaneRenderReport, PaneScrollbackResponse, PluginPermission, RegexHighlight, Resize,
-    ResizeStrategy, SessionInfo, Styling, TabInfo, ThemeHue, WebSharing,
+    ListTabsResponse, MessageToPlugin, NewPanePlacement, PaneContents, PaneInfo, PaneListEntry,
+    PaneManifest, PaneRenderReport, PaneScrollbackResponse, PluginPermission, RegexHighlight,
+    RelayShareStatus, Resize, ResizeStrategy, SessionInfo, Styling, TabInfo, ThemeHue, WebSharing,
 };
 use zellij_utils::errors::prelude::*;
 use zellij_utils::input::actions::Action;
@@ -858,11 +858,15 @@ pub enum ScreenInstruction {
     TogglePaneInGroup(ClientId, Option<NotificationEnd>),
     ToggleGroupMarking(ClientId, Option<NotificationEnd>),
     SessionSharingStatusChange(bool),
+    RelayShareStatusChange(Option<RelayShareStatus>),
+    LaunchOrFocusSharePlugin,
+    RefreshSharePlugin,
     SetMouseSelectionSupport(PaneId, bool),
     InterceptKeyPresses(PluginId, ClientId),
     ClearKeyPressesIntercepts(ClientId),
     ReplacePaneWithExistingPane(PaneId, PaneId, bool, Option<NotificationEnd>), // bool -> suppress_replaced_pane
     AddWatcherClient(ClientId, Size),
+    AddRelayWatcherClient(ClientId),
     RemoveWatcherClient(ClientId),
     SetFollowedClient(ClientId),
     WatcherTerminalResize(ClientId, Size),
@@ -1211,6 +1215,11 @@ impl From<&ScreenInstruction> for ScreenContext {
             ScreenInstruction::SessionSharingStatusChange(..) => {
                 ScreenContext::SessionSharingStatusChange
             },
+            ScreenInstruction::RelayShareStatusChange(..) => ScreenContext::RelayShareStatusChange,
+            ScreenInstruction::LaunchOrFocusSharePlugin => {
+                ScreenContext::LaunchOrFocusSharePlugin
+            },
+            ScreenInstruction::RefreshSharePlugin => ScreenContext::RefreshSharePlugin,
             ScreenInstruction::SetMouseSelectionSupport(..) => {
                 ScreenContext::SetMouseSelectionSupport
             },
@@ -1222,6 +1231,7 @@ impl From<&ScreenInstruction> for ScreenContext {
                 ScreenContext::ReplacePaneWithExistingPane
             },
             ScreenInstruction::AddWatcherClient(..) => ScreenContext::AddWatcherClient,
+            ScreenInstruction::AddRelayWatcherClient(..) => ScreenContext::AddWatcherClient,
             ScreenInstruction::RemoveWatcherClient(..) => ScreenContext::RemoveWatcherClient,
             ScreenInstruction::SetFollowedClient(..) => ScreenContext::SetFollowedClient,
             ScreenInstruction::WatcherTerminalResize(..) => ScreenContext::WatcherTerminalResize,
@@ -1398,6 +1408,11 @@ impl RenderBlocker {
 pub(crate) struct WatcherState {
     size: Size,
     should_force_render: bool,
+    /// True when the watcher is a virtual client owned by a relay r/o
+    /// fan-out group — its size must track the Screen's own size so the
+    /// ciphertext stream produced by `Output::serialize_with_size` matches
+    /// the real session viewport for any number of browser viewers.
+    is_relay_fanout: bool,
 }
 
 impl WatcherState {
@@ -1405,6 +1420,15 @@ impl WatcherState {
         WatcherState {
             size,
             should_force_render: true,
+            is_relay_fanout: false,
+        }
+    }
+
+    pub fn new_relay_fanout(size: Size) -> Self {
+        WatcherState {
+            size,
+            should_force_render: true,
+            is_relay_fanout: true,
         }
     }
 
@@ -1426,6 +1450,10 @@ impl WatcherState {
 
     pub fn set_force_render(&mut self) {
         self.should_force_render = true;
+    }
+
+    pub fn is_relay_fanout(&self) -> bool {
+        self.is_relay_fanout
     }
 }
 
@@ -1518,6 +1546,7 @@ pub(crate) struct Screen {
     default_editor: Option<PathBuf>,
     web_clients_allowed: bool,
     web_sharing: WebSharing,
+    relay_share_status: Option<RelayShareStatus>,
     current_pane_group: Rc<RefCell<PaneGroups>>,
     advanced_mouse_actions: bool,
     mouse_scroll_resize: bool,
@@ -1701,6 +1730,7 @@ impl Screen {
             default_editor,
             web_clients_allowed,
             web_sharing,
+            relay_share_status: None,
             current_pane_group: Rc::new(RefCell::new(current_pane_group)),
             currently_marking_pane_group: Rc::new(RefCell::new(HashMap::new())),
             advanced_mouse_actions,
@@ -2224,6 +2254,16 @@ impl Screen {
                     .with_context(err_context)?;
                 tab.set_force_render();
             }
+            // Relay-fan-out virtual watchers are registered at the session
+            // viewport size; propagate the new size so their outbound
+            // stream stays in sync with the real terminal state.
+            for watcher_state in self.watcher_clients.values_mut() {
+                if watcher_state.is_relay_fanout() {
+                    watcher_state.set_size(new_screen_size);
+                    watcher_state.set_force_render();
+                }
+            }
+            self.broadcast_session_size_to_relay_watchers(new_screen_size);
             self.log_and_report_session_state()
                 .with_context(err_context)?;
             self.render(None).with_context(err_context)
@@ -3930,11 +3970,17 @@ impl Screen {
             output.collect_ansi_pane_contents =
                 self.pane_render_subscribers.values().any(|s| s.ansi);
 
+            // Tabs that participate in mobile mode (the mobile tab and the
+            // backgrounded pre-mobile tab a client returns to on exit) are
+            // exempt from the empty-tab reaper below: a pre-mobile tab whose
+            // panes are mirrored into the mobile plugin has no selectable tiled
+            // pane of its own, but closing it would tear down the session.
+            let mobile_related_tabs = self.mobile_state.mobile_related_tab_ids();
             for (tab_index, tab) in &mut self.tabs {
                 if tab.has_selectable_tiled_panes() {
                     // Pass None for normal client rendering
                     tab.render(&mut output, None).context(err_context)?;
-                } else if !tab.is_pending() {
+                } else if !tab.is_pending() && !mobile_related_tabs.contains(tab_index) {
                     tabs_to_close.push(*tab_index);
                 }
             }
@@ -4409,6 +4455,7 @@ impl Screen {
         if let Some(aggregate) = self.sixel_host_support_aggregate() {
             tab.update_sixel_host_support(aggregate);
         }
+        tab.update_relay_share_status(self.relay_share_status.clone());
         self.tabs.insert(tab_id, tab);
         Ok(())
     }
@@ -4754,6 +4801,47 @@ impl Screen {
         self.render(None)?;
 
         Ok(())
+    }
+
+    /// Register a relay-fan-out virtual watcher at the current session
+    /// viewport size. Subsequent `resize_to_screen` updates propagate to
+    /// every watcher with `is_relay_fanout == true`.
+    pub fn add_relay_watcher_client(&mut self, client_id: ClientId) -> Result<()> {
+        let size = self.size;
+        self.watcher_clients
+            .insert(client_id, WatcherState::new_relay_fanout(size));
+        if let Some(os_input) = &self.bus.os_input {
+            let _ = os_input.send_to_client(
+                client_id,
+                ServerToClientMsg::SessionSize {
+                    rows: size.rows as u32,
+                    cols: size.cols as u32,
+                },
+            );
+        }
+        self.render(None)?;
+        Ok(())
+    }
+
+    /// Broadcast the current session-viewport size to every relay-fan-out
+    /// virtual watcher. Called from `resize_to_screen` so browser-side
+    /// clippers can re-emit against the fresh dimensions without any
+    /// additional plumbing.
+    fn broadcast_session_size_to_relay_watchers(&mut self, size: Size) {
+        let Some(os_input) = &self.bus.os_input else {
+            return;
+        };
+        for (client_id, watcher_state) in self.watcher_clients.iter() {
+            if watcher_state.is_relay_fanout() {
+                let _ = os_input.send_to_client(
+                    *client_id,
+                    ServerToClientMsg::SessionSize {
+                        rows: size.rows as u32,
+                        cols: size.cols as u32,
+                    },
+                );
+            }
+        }
     }
 
     pub fn remove_watcher_client(&mut self, client_id: ClientId) {
@@ -11321,6 +11409,64 @@ pub(crate) fn screen_thread_main(
                 let _ = screen.log_and_report_session_state();
                 let _ = screen.render(None);
             },
+            ScreenInstruction::RelayShareStatusChange(status) => {
+                screen.relay_share_status = status.clone();
+                for tab in screen.tabs.values_mut() {
+                    tab.update_relay_share_status(status.clone());
+                }
+                let _ = screen.log_and_report_session_state();
+                let _ = screen.render(None);
+            },
+            ScreenInstruction::LaunchOrFocusSharePlugin => {
+                if let Ok(run_plugin) =
+                    RunPluginOrAlias::from_url("zellij:share", &None, None, None)
+                {
+                    if let Some(client_id) = screen.get_first_client_id() {
+                        let mut completion_tx = None;
+                        if screen.focus_plugin_pane(
+                            &run_plugin,
+                            true,
+                            true,
+                            false,
+                            client_id,
+                            &mut completion_tx,
+                        )? {
+                            screen.render(None)?;
+                            screen.log_and_report_session_state()?;
+                        }
+                    }
+                }
+                let message = MessageToPlugin::new("share_admission_pending")
+                    .with_plugin_url("zellij:share")
+                    .new_plugin_instance_should_float(true)
+                    .new_plugin_instance_should_be_focused();
+                screen
+                    .bus
+                    .senders
+                    .send_to_plugin(PluginInstruction::MessageFromPlugin {
+                        source_plugin_id: 0,
+                        message,
+                    })?;
+            },
+            ScreenInstruction::RefreshSharePlugin => {
+                let message = MessageToPlugin {
+                    plugin_url: None,
+                    destination_plugin_id: None,
+                    plugin_config: Default::default(),
+                    message_name: "share_devices_changed".to_owned(),
+                    message_payload: None,
+                    message_args: Default::default(),
+                    new_plugin_args: None,
+                    floating_pane_coordinates: None,
+                };
+                screen
+                    .bus
+                    .senders
+                    .send_to_plugin(PluginInstruction::MessageFromPlugin {
+                        source_plugin_id: 0,
+                        message,
+                    })?;
+            },
             ScreenInstruction::HighlightAndUnhighlightPanes(
                 pane_ids_to_highlight,
                 pane_ids_to_unhighlight,
@@ -11435,6 +11581,11 @@ pub(crate) fn screen_thread_main(
                     .context("failed to add watcher client")?;
                 screen.set_watcher_size(client_id, size);
                 screen.render(None)?;
+            },
+            ScreenInstruction::AddRelayWatcherClient(client_id) => {
+                screen
+                    .add_relay_watcher_client(client_id)
+                    .context("failed to add relay watcher client")?;
             },
             ScreenInstruction::RemoveWatcherClient(client_id) => {
                 screen.remove_watcher_client(client_id);

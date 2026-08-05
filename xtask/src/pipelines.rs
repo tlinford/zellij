@@ -32,6 +32,9 @@ pub fn make(sh: &Shell, flags: flags::Make) -> anyhow::Result<()> {
                     plugins_only: false,
                     no_web: flags.no_web,
                     args: vec![],
+                    wasm_clip: false,
+                    app_origin: None,
+                    app_host: None,
                 },
             )
         })
@@ -66,6 +69,9 @@ pub fn install(sh: &Shell, flags: flags::Install) -> anyhow::Result<()> {
             plugins_only: true,
             no_web: flags.no_web,
             args: vec![],
+            wasm_clip: false,
+            app_origin: None,
+            app_host: None,
         },
     )
     .and_then(|_| {
@@ -78,6 +84,9 @@ pub fn install(sh: &Shell, flags: flags::Install) -> anyhow::Result<()> {
                 plugins_only: false,
                 no_web: flags.no_web,
                 args: flags.args.clone(),
+                wasm_clip: false,
+                app_origin: None,
+                app_host: None,
             },
         )
     })
@@ -150,6 +159,9 @@ pub fn run(sh: &Shell, mut flags: flags::Run) -> anyhow::Result<()> {
                 plugins_only: true,
                 no_web: flags.no_web,
                 args: vec![],
+                wasm_clip: false,
+                app_origin: None,
+                app_host: None,
             },
         )
         .and_then(|_| crate::cargo())
@@ -295,9 +307,32 @@ pub fn publish(sh: &Shell, flags: flags::Publish) -> anyhow::Result<()> {
                 plugins_only: true,
                 no_web: false,
                 args: vec![],
+                wasm_clip: false,
+                app_origin: None,
+                app_host: None,
             },
         )
         .context(err_context)?;
+
+        // Build the ansi-clip wasm blob. The resulting
+        // `zellij-web-client-assets/assets/clip.wasm` is picked up by the
+        // `git commit -aem` below and shipped alongside the plugin wasm.
+        build::build(
+            sh,
+            flags::Build {
+                release: true,
+                no_plugins: true,
+                plugins_only: false,
+                no_web: true,
+                wasm_clip: true,
+                app_origin: None,
+                app_host: None,
+            },
+        )
+        .context(err_context)?;
+
+        build::stage_app_origin(sh, &project_dir.join("target").join("app-origin"), None)
+            .context(err_context)?;
 
         // Update default config
         sh.copy_file(
@@ -431,4 +466,79 @@ pub fn publish(sh: &Shell, flags: flags::Publish) -> anyhow::Result<()> {
     }
 
     result
+}
+
+pub fn relay_server(sh: &Shell, args: &[std::ffi::OsString]) -> anyhow::Result<()> {
+    let _pd = sh.push_dir(crate::project_root());
+
+    let mut release = false;
+    let mut bind: Option<String> = None;
+    let mut passthrough: Vec<std::ffi::OsString> = Vec::new();
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        if arg == "-r" || arg == "--release" {
+            release = true;
+        } else if arg == "--bind" {
+            bind = it
+                .next()
+                .map(|a| a.to_string_lossy().into_owned());
+        } else {
+            passthrough.push(arg.clone());
+        }
+    }
+
+    let subcommand = passthrough
+        .first()
+        .map(|a| a.to_string_lossy().into_owned());
+    let is_serve = match subcommand.as_deref() {
+        None | Some("serve") => true,
+        _ => false,
+    };
+
+    if is_serve {
+        build::build_wasm_clip(sh, true, true)?;
+        build::build_wasm_relay_crypto(sh, true)?;
+        refresh_web_assets_embed()?;
+    }
+
+    let bind = bind.unwrap_or_else(|| "127.0.0.1:8765".to_string());
+    let public_url = format!("http://{}/r/{{slug}}", bind);
+
+    let cargo = crate::cargo()?;
+    let mut cmd = cmd!(sh, "{cargo} run").args(["--package", "zellij-relay-server"]);
+    if release {
+        cmd = cmd.arg("--release");
+    }
+    cmd = cmd.arg("--");
+    if passthrough.is_empty() {
+        cmd = cmd.arg("serve");
+    } else {
+        for a in &passthrough {
+            cmd = cmd.arg(a);
+        }
+    }
+    if std::env::var_os("RELAY_BIND_ADDR").is_none() {
+        cmd = cmd.env("RELAY_BIND_ADDR", &bind);
+    }
+    if std::env::var_os("RELAY_PUBLIC_URL_TEMPLATE").is_none() {
+        cmd = cmd.env("RELAY_PUBLIC_URL_TEMPLATE", &public_url);
+    }
+
+    if is_serve {
+        println!(">> relay listening on {} (share URLs: {})", bind, public_url);
+    }
+    cmd.run().context("failed to run zellij-relay-server")?;
+    Ok(())
+}
+
+fn refresh_web_assets_embed() -> anyhow::Result<()> {
+    let lib = crate::project_root()
+        .join("zellij-web-client-assets")
+        .join("src")
+        .join("lib.rs");
+    let contents =
+        std::fs::read(&lib).with_context(|| format!("failed to read {}", lib.display()))?;
+    std::fs::write(&lib, &contents)
+        .with_context(|| format!("failed to touch {}", lib.display()))?;
+    Ok(())
 }

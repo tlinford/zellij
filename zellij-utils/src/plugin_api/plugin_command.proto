@@ -218,6 +218,16 @@ enum CommandName {
   NewPane = 226;
   ToggleFocusNoUiFullscreen = 227;
   FocusHostSession = 228;
+  ShareCurrentSessionToRelay = 229;
+  StopSharingCurrentSessionFromRelay = 230;
+  SetRelayTunnelAuthToken = 231;
+  RelayMintGuestLink = 232;
+  RelayRevokeGuestLink = 233;
+  RelayListGuestLinks = 234;
+  RelayListPendingAdmissions = 235;
+  RelayResolveAdmission = 236;
+  RelayListDevices = 237;
+  RelayRevokeDevice = 238;
 }
 
 message PluginCommand {
@@ -378,7 +388,32 @@ message PluginCommand {
     NewTiledPaneInTabPayload new_tiled_pane_in_tab_payload = 169;
     SetPaneFrameStylePayload set_pane_frame_style_payload = 170;
     ToggleFloatingPanesPayload toggle_floating_panes_payload = 171;
+    SetRelayTunnelAuthTokenPayload set_relay_tunnel_auth_token_payload = 176;
+    RelayMintGuestLinkPayload relay_mint_guest_link_payload = 172;
+    RelayRevokeGuestLinkPayload relay_revoke_guest_link_payload = 173;
+    RelayResolveAdmissionPayload relay_resolve_admission_payload = 174;
+    RelayRevokeDevicePayload relay_revoke_device_payload = 175;
   }
+}
+
+message SetRelayTunnelAuthTokenPayload {
+  string token = 1;
+}
+
+message RelayMintGuestLinkPayload {
+  bool read_only = 1;
+  string label = 2;
+  bool enroll = 3;
+}
+
+message RelayRevokeGuestLinkPayload {
+  bytes link_id = 1;
+}
+
+message RelayResolveAdmissionPayload {
+  uint32 client_id = 1;
+  bool admit = 2;
+  bool code_confirmed = 3;
 }
 
 message SetPaneFrameStylePayload {
@@ -387,6 +422,10 @@ message SetPaneFrameStylePayload {
 
 message ToggleFloatingPanesPayload {
   optional uint64 tab_id = 1;
+}
+
+message RelayRevokeDevicePayload {
+  bytes device_id = 1;
 }
 
 message NewTabPayload {
@@ -874,6 +913,80 @@ message ListTokensResponse {
   repeated string creation_times = 2;
   repeated bool read_only_flags = 3;
   optional string error = 4;
+}
+
+message RelayGuestLinkInfo {
+  bytes link_id = 1;
+  string label = 2;
+  bool read_only = 3;
+  string url = 4;
+  bool enroll = 5;
+  bool spent = 6;
+  bool active = 7;
+}
+
+message RelayMintGuestLinkResponse {
+  optional RelayGuestLinkInfo link = 1;
+  optional string error = 2;
+}
+
+message RelayRevokeGuestLinkResponse {
+  bool revoked = 1;
+  optional string error = 2;
+}
+
+message RelayListGuestLinksResponse {
+  repeated RelayGuestLinkInfo links = 1;
+  optional string error = 2;
+}
+
+message RelayPendingAdmissionInfo {
+  uint32 client_id = 1;
+  string sas = 2;
+  string label = 3;
+  bool read_only = 4;
+  optional string claimed_name = 5;
+  bool contested = 6;
+  uint32 seconds_remaining = 7;
+}
+
+message RelayListPendingAdmissionsResponse {
+  repeated RelayPendingAdmissionInfo admissions = 1;
+  optional string error = 2;
+}
+
+message RelayResolveAdmissionResponse {
+  bool resolved = 1;
+  optional string error = 2;
+}
+
+enum DeviceScope {
+  DEVICE_SCOPE_SESSION = 0;
+  DEVICE_SCOPE_HOST = 1;
+}
+
+enum DeviceStorageLevel {
+  DEVICE_STORAGE_LEVEL_FILE_PERMS_ONLY = 0;
+}
+
+message RelayDeviceInfo {
+  bytes device_id = 1;
+  string label = 2;
+  bool read_only = 3;
+  DeviceScope scope = 4;
+  optional uint64 last_used = 5;
+  DeviceStorageLevel storage_level = 6;
+  bool connected = 7;
+}
+
+message RelayListDevicesResponse {
+  repeated RelayDeviceInfo devices = 1;
+  optional string error = 2;
+}
+
+message RelayRevokeDeviceResponse {
+  bool revoked = 1;
+  optional string error = 2;
 }
 
 message RevokeAllWebTokensResponse {

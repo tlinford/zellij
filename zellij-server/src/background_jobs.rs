@@ -849,6 +849,7 @@ fn query_webserver_via_ipc(web_server_base_url: &str) -> Result<WebServerStatus>
                 }
             },
             Err(_) => continue,
+            _ => continue,
         }
     }
 

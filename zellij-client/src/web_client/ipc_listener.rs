@@ -8,9 +8,9 @@ use zellij_utils::web_server_commands::{InstructionForWebServer, VersionInfo, We
 use zellij_utils::web_server_contract::web_server_contract::InstructionForWebServer as ProtoInstructionForWebServer;
 use zellij_utils::web_server_contract::web_server_contract::WebServerResponse as ProtoWebServerResponse;
 
-pub async fn create_webserver_receiver(
+pub async fn bind_webserver_listener(
     id: &str,
-) -> Result<interprocess::local_socket::tokio::Stream, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<interprocess::local_socket::tokio::Listener, Box<dyn std::error::Error + Send + Sync>> {
     std::fs::create_dir_all(&WEBSERVER_SOCKET_PATH.as_path())?;
     let socket_path = WEBSERVER_SOCKET_PATH.join(format!("{}", id));
 
@@ -19,8 +19,7 @@ pub async fn create_webserver_receiver(
     }
 
     let listener = ipc_bind_async(&socket_path)?;
-    let stream = listener.accept().await?;
-    Ok(stream)
+    Ok(listener)
 }
 
 pub async fn receive_webserver_instruction(
@@ -66,8 +65,20 @@ pub async fn listen_to_web_server_instructions(
     web_server_ip: IpAddr,
     web_server_port: u16,
 ) {
+    // Bind the IPC socket exactly once and accept connections in a loop.
+    // Rebinding per request would delete and recreate the socket file
+    // between accepts, so any client connecting during that window fails
+    // with ENOENT — which the relay-share path (three back-to-back
+    // queries) hits reliably.
+    let listener = match bind_webserver_listener(id).await {
+        Ok(listener) => listener,
+        Err(e) => {
+            log::error!("Failed to bind web server ipc socket: {}", e);
+            return;
+        },
+    };
     loop {
-        let receiver = create_webserver_receiver(id).await;
+        let receiver = listener.accept().await;
         match receiver {
             Ok(mut receiver) => match receive_webserver_instruction(&mut receiver).await {
                 Ok(instruction) => match instruction {

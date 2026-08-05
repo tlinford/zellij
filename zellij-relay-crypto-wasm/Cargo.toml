@@ -1,0 +1,15 @@
+[package]
+name = "zellij-relay-crypto-wasm"
+version.workspace = true
+authors = ["Aram Drevekenin <aram@poor.dev>"]
+edition.workspace = true
+license.workspace = true
+description = "Raw wasm32 C-ABI shim exposing the relay E2E SPAKE2 handshake + key derivation to the browser viewer"
+include = ["src/**/*"]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+zellij-relay-protocol = { workspace = true }
+getrandom = { version = "0.2", features = ["custom"] }

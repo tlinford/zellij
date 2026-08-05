@@ -121,9 +121,15 @@ pub use super::generated_api::api::{
         SaveSessionResponse as ProtobufSaveSessionResponse, ScrollDownInPaneIdPayload,
         ScrollToBottomInPaneIdPayload, ScrollToTopInPaneIdPayload, ScrollUpInPaneIdPayload,
         SessionListSnapshot as ProtobufSessionListSnapshot, SetFloatingPanePinnedPayload,
+        RelayDeviceInfo, RelayGuestLinkInfo, RelayListDevicesResponse,
+        RelayListGuestLinksResponse, RelayListPendingAdmissionsResponse,
+        RelayMintGuestLinkPayload, RelayMintGuestLinkResponse, RelayPendingAdmissionInfo,
+        RelayResolveAdmissionPayload, RelayResolveAdmissionResponse, RelayRevokeDevicePayload,
+        RelayRevokeDeviceResponse, RelayRevokeGuestLinkPayload, RelayRevokeGuestLinkResponse,
         SetPaneBorderlessPayload, SetPaneColorPayload,
         SetPaneFrameStylePayload as ProtobufSetPaneFrameStylePayload,
-        SetPaneRegexHighlightsPayload, SetSelfMouseSelectionSupportPayload,
+        SetPaneRegexHighlightsPayload, SetRelayTunnelAuthTokenPayload,
+        SetSelfMouseSelectionSupportPayload,
         SetSoftKeyboardPayload as ProtobufSetSoftKeyboardPayload, SetTimeoutPayload,
         ShowCursorPayload, ShowFloatingPanesPayload as ProtobufShowFloatingPanesPayload,
         ShowFloatingPanesResponse as ProtobufShowFloatingPanesResponse, ShowPaneWithIdPayload,
@@ -142,7 +148,8 @@ use crate::data::{
     GetPaneCwdResponse, GetPanePidResponse, GetPaneRunningCommandResponse, GetSessionListResponse,
     HighlightLayer, HighlightStyle, HttpVerb, InputMode, KeyWithModifier, KillSessionsResponse,
     MessageToPlugin, NewPluginArgs, PaneId, PermissionType, PluginCommand, RegexHighlight,
-    RenameLayoutResponse, SaveLayoutResponse, SessionInfo, SessionListSnapshot,
+    RenameLayoutResponse, SaveLayoutResponse, SessionInfo,
+    SessionListSnapshot,
 };
 use crate::input::actions::Action;
 use crate::input::layout::PercentOrFixed;
@@ -2374,6 +2381,83 @@ impl TryFrom<ProtobufPluginCommand> for PluginCommand {
                     Ok(PluginCommand::StopSharingCurrentSession)
                 }
             },
+            Some(CommandName::ShareCurrentSessionToRelay) => {
+                if protobuf_plugin_command.payload.is_some() {
+                    Err("ShareCurrentSessionToRelay should not have a payload")
+                } else {
+                    Ok(PluginCommand::ShareCurrentSessionToRelay)
+                }
+            },
+            Some(CommandName::StopSharingCurrentSessionFromRelay) => {
+                if protobuf_plugin_command.payload.is_some() {
+                    Err("StopSharingCurrentSessionFromRelay should not have a payload")
+                } else {
+                    Ok(PluginCommand::StopSharingCurrentSessionFromRelay)
+                }
+            },
+            Some(CommandName::SetRelayTunnelAuthToken) => match protobuf_plugin_command.payload {
+                Some(Payload::SetRelayTunnelAuthTokenPayload(payload)) => {
+                    Ok(PluginCommand::SetRelayTunnelAuthToken(payload.token))
+                },
+                _ => Err("SetRelayTunnelAuthToken requires a payload"),
+            },
+            Some(CommandName::RelayMintGuestLink) => match protobuf_plugin_command.payload {
+                Some(Payload::RelayMintGuestLinkPayload(payload)) => {
+                    Ok(PluginCommand::RelayMintGuestLink {
+                        read_only: payload.read_only,
+                        label: payload.label,
+                        enroll: payload.enroll,
+                    })
+                },
+                _ => Err("RelayMintGuestLink requires a payload"),
+            },
+            Some(CommandName::RelayRevokeGuestLink) => match protobuf_plugin_command.payload {
+                Some(Payload::RelayRevokeGuestLinkPayload(payload)) => {
+                    Ok(PluginCommand::RelayRevokeGuestLink {
+                        link_id: payload.link_id,
+                    })
+                },
+                _ => Err("RelayRevokeGuestLink requires a payload"),
+            },
+            Some(CommandName::RelayListGuestLinks) => {
+                if protobuf_plugin_command.payload.is_some() {
+                    Err("RelayListGuestLinks should not have a payload")
+                } else {
+                    Ok(PluginCommand::RelayListGuestLinks)
+                }
+            },
+            Some(CommandName::RelayListPendingAdmissions) => {
+                if protobuf_plugin_command.payload.is_some() {
+                    Err("RelayListPendingAdmissions should not have a payload")
+                } else {
+                    Ok(PluginCommand::RelayListPendingAdmissions)
+                }
+            },
+            Some(CommandName::RelayResolveAdmission) => match protobuf_plugin_command.payload {
+                Some(Payload::RelayResolveAdmissionPayload(payload)) => {
+                    Ok(PluginCommand::RelayResolveAdmission {
+                        client_id: payload.client_id,
+                        admit: payload.admit,
+                        code_confirmed: payload.code_confirmed,
+                    })
+                },
+                _ => Err("RelayResolveAdmission requires a payload"),
+            },
+            Some(CommandName::RelayListDevices) => {
+                if protobuf_plugin_command.payload.is_some() {
+                    Err("RelayListDevices should not have a payload")
+                } else {
+                    Ok(PluginCommand::RelayListDevices)
+                }
+            },
+            Some(CommandName::RelayRevokeDevice) => match protobuf_plugin_command.payload {
+                Some(Payload::RelayRevokeDevicePayload(payload)) => {
+                    Ok(PluginCommand::RelayRevokeDevice {
+                        device_id: payload.device_id,
+                    })
+                },
+                _ => Err("RelayRevokeDevice requires a payload"),
+            },
             Some(CommandName::SetSelfMouseSelectionSupport) => {
                 match protobuf_plugin_command.payload {
                     Some(Payload::SetSelfMouseSelectionSupportPayload(
@@ -4152,6 +4236,70 @@ impl TryFrom<PluginCommand> for ProtobufPluginCommand {
                 name: CommandName::StopSharingCurrentSession as i32,
                 payload: None,
             }),
+            PluginCommand::ShareCurrentSessionToRelay => Ok(ProtobufPluginCommand {
+                name: CommandName::ShareCurrentSessionToRelay as i32,
+                payload: None,
+            }),
+            PluginCommand::StopSharingCurrentSessionFromRelay => Ok(ProtobufPluginCommand {
+                name: CommandName::StopSharingCurrentSessionFromRelay as i32,
+                payload: None,
+            }),
+            PluginCommand::SetRelayTunnelAuthToken(token) => Ok(ProtobufPluginCommand {
+                name: CommandName::SetRelayTunnelAuthToken as i32,
+                payload: Some(Payload::SetRelayTunnelAuthTokenPayload(
+                    SetRelayTunnelAuthTokenPayload { token },
+                )),
+            }),
+            PluginCommand::RelayMintGuestLink {
+                read_only,
+                label,
+                enroll,
+            } => Ok(ProtobufPluginCommand {
+                name: CommandName::RelayMintGuestLink as i32,
+                payload: Some(Payload::RelayMintGuestLinkPayload(RelayMintGuestLinkPayload {
+                    read_only,
+                    label,
+                    enroll,
+                })),
+            }),
+            PluginCommand::RelayRevokeGuestLink { link_id } => Ok(ProtobufPluginCommand {
+                name: CommandName::RelayRevokeGuestLink as i32,
+                payload: Some(Payload::RelayRevokeGuestLinkPayload(
+                    RelayRevokeGuestLinkPayload { link_id },
+                )),
+            }),
+            PluginCommand::RelayListGuestLinks => Ok(ProtobufPluginCommand {
+                name: CommandName::RelayListGuestLinks as i32,
+                payload: None,
+            }),
+            PluginCommand::RelayListPendingAdmissions => Ok(ProtobufPluginCommand {
+                name: CommandName::RelayListPendingAdmissions as i32,
+                payload: None,
+            }),
+            PluginCommand::RelayResolveAdmission {
+                client_id,
+                admit,
+                code_confirmed,
+            } => Ok(ProtobufPluginCommand {
+                name: CommandName::RelayResolveAdmission as i32,
+                payload: Some(Payload::RelayResolveAdmissionPayload(
+                    RelayResolveAdmissionPayload {
+                        client_id,
+                        admit,
+                        code_confirmed,
+                    },
+                )),
+            }),
+            PluginCommand::RelayListDevices => Ok(ProtobufPluginCommand {
+                name: CommandName::RelayListDevices as i32,
+                payload: None,
+            }),
+            PluginCommand::RelayRevokeDevice { device_id } => Ok(ProtobufPluginCommand {
+                name: CommandName::RelayRevokeDevice as i32,
+                payload: Some(Payload::RelayRevokeDevicePayload(RelayRevokeDevicePayload {
+                    device_id,
+                })),
+            }),
             PluginCommand::SetSelfMouseSelectionSupport(support_mouse_selection) => {
                 Ok(ProtobufPluginCommand {
                     name: CommandName::SetSelfMouseSelectionSupport as i32,
@@ -5278,6 +5426,145 @@ mod tests {
         match decoded {
             PluginCommand::ToggleFloatingPanes { tab_id } => assert_eq!(tab_id, Some(2)),
             other => panic!("expected ToggleFloatingPanes, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn share_current_session_to_relay_roundtrip() {
+        let original = PluginCommand::ShareCurrentSessionToRelay;
+        let proto: ProtobufPluginCommand = original.clone().try_into().unwrap();
+        assert_eq!(proto.name, CommandName::ShareCurrentSessionToRelay as i32);
+        let decoded: PluginCommand = proto.try_into().unwrap();
+        match decoded {
+            PluginCommand::ShareCurrentSessionToRelay => {},
+            other => panic!("expected ShareCurrentSessionToRelay, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn relay_mint_guest_link_roundtrip() {
+        let original = PluginCommand::RelayMintGuestLink {
+            read_only: true,
+            label: "Alice".to_string(),
+            enroll: true,
+        };
+        let proto: ProtobufPluginCommand = original.clone().try_into().unwrap();
+        assert_eq!(proto.name, CommandName::RelayMintGuestLink as i32);
+        let decoded: PluginCommand = proto.try_into().unwrap();
+        match decoded {
+            PluginCommand::RelayMintGuestLink { read_only, label, enroll } => {
+                assert!(read_only);
+                assert_eq!(label, "Alice");
+                assert!(enroll);
+            },
+            other => panic!("expected RelayMintGuestLink, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn relay_revoke_guest_link_roundtrip() {
+        let original = PluginCommand::RelayRevokeGuestLink {
+            link_id: vec![1, 2, 3, 4],
+        };
+        let proto: ProtobufPluginCommand = original.clone().try_into().unwrap();
+        assert_eq!(proto.name, CommandName::RelayRevokeGuestLink as i32);
+        let decoded: PluginCommand = proto.try_into().unwrap();
+        match decoded {
+            PluginCommand::RelayRevokeGuestLink { link_id } => {
+                assert_eq!(link_id, vec![1, 2, 3, 4]);
+            },
+            other => panic!("expected RelayRevokeGuestLink, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn relay_list_guest_links_roundtrip() {
+        let original = PluginCommand::RelayListGuestLinks;
+        let proto: ProtobufPluginCommand = original.clone().try_into().unwrap();
+        assert_eq!(proto.name, CommandName::RelayListGuestLinks as i32);
+        let decoded: PluginCommand = proto.try_into().unwrap();
+        match decoded {
+            PluginCommand::RelayListGuestLinks => {},
+            other => panic!("expected RelayListGuestLinks, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn relay_list_pending_admissions_roundtrip() {
+        let original = PluginCommand::RelayListPendingAdmissions;
+        let proto: ProtobufPluginCommand = original.clone().try_into().unwrap();
+        assert_eq!(proto.name, CommandName::RelayListPendingAdmissions as i32);
+        let decoded: PluginCommand = proto.try_into().unwrap();
+        match decoded {
+            PluginCommand::RelayListPendingAdmissions => {},
+            other => panic!("expected RelayListPendingAdmissions, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn relay_resolve_admission_roundtrip() {
+        let original = PluginCommand::RelayResolveAdmission {
+            client_id: 42,
+            admit: true,
+            code_confirmed: true,
+        };
+        let proto: ProtobufPluginCommand = original.clone().try_into().unwrap();
+        assert_eq!(proto.name, CommandName::RelayResolveAdmission as i32);
+        let decoded: PluginCommand = proto.try_into().unwrap();
+        match decoded {
+            PluginCommand::RelayResolveAdmission {
+                client_id,
+                admit,
+                code_confirmed,
+            } => {
+                assert_eq!(client_id, 42);
+                assert!(admit);
+                assert!(code_confirmed);
+            },
+            other => panic!("expected RelayResolveAdmission, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn relay_list_devices_roundtrip() {
+        let original = PluginCommand::RelayListDevices;
+        let proto: ProtobufPluginCommand = original.clone().try_into().unwrap();
+        assert_eq!(proto.name, CommandName::RelayListDevices as i32);
+        let decoded: PluginCommand = proto.try_into().unwrap();
+        match decoded {
+            PluginCommand::RelayListDevices => {},
+            other => panic!("expected RelayListDevices, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn relay_revoke_device_roundtrip() {
+        let original = PluginCommand::RelayRevokeDevice {
+            device_id: vec![1, 2, 3, 4],
+        };
+        let proto: ProtobufPluginCommand = original.clone().try_into().unwrap();
+        assert_eq!(proto.name, CommandName::RelayRevokeDevice as i32);
+        let decoded: PluginCommand = proto.try_into().unwrap();
+        match decoded {
+            PluginCommand::RelayRevokeDevice { device_id } => {
+                assert_eq!(device_id, vec![1, 2, 3, 4]);
+            },
+            other => panic!("expected RelayRevokeDevice, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn stop_sharing_current_session_from_relay_roundtrip() {
+        let original = PluginCommand::StopSharingCurrentSessionFromRelay;
+        let proto: ProtobufPluginCommand = original.clone().try_into().unwrap();
+        assert_eq!(
+            proto.name,
+            CommandName::StopSharingCurrentSessionFromRelay as i32
+        );
+        let decoded: PluginCommand = proto.try_into().unwrap();
+        match decoded {
+            PluginCommand::StopSharingCurrentSessionFromRelay => {},
+            other => panic!("expected StopSharingCurrentSessionFromRelay, got {:?}", other),
         }
     }
 }
