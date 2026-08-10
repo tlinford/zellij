@@ -54,17 +54,31 @@ async function getClientIdRelay(token, expectedE2e, opts) {
     if (linkId) {
         loginRequest.link_id = Array.from(linkId);
     }
-    let loginRes = await fetch(`${httpBase}/command/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(loginRequest),
-    });
+    let loginRes;
+    try {
+        loginRes = await fetch(`${httpBase}/command/login`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(loginRequest),
+        });
+    } catch (e) {
+        return fail("Error", `Could not reach the relay at ${httpBase}: ${e.message}`);
+    }
     if (loginRes.status === 401) {
         return fail("Error", "Incorrect or expired secret.");
     } else if (!loginRes.ok) {
         return fail("Error", `Error ${loginRes.status} connecting to relay.`);
     }
-    const loginBody = await loginRes.json();
+    let loginBody;
+    try {
+        loginBody = await loginRes.json();
+    } catch (e) {
+        return fail(
+            "Error",
+            "The relay login endpoint returned a non-JSON response — " +
+                "the reverse proxy in front of the relay is likely misrouting requests."
+        );
+    }
     const sharerMsg = new Uint8Array(loginBody.sharer_msg || []);
     const sharerConfirm = new Uint8Array(loginBody.sharer_confirm || []);
     const handshake = loginBody.handshake;
@@ -100,20 +114,34 @@ async function getClientIdRelay(token, expectedE2e, opts) {
     }
 
     const sas = await deriveSas(viewerMsg, sharerMsg);
-    let sessRes = await fetch(`${httpBase}/session${sessionQuery(opts)}`, {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            "X-Zellij-Handshake": handshake,
-        },
-        body: JSON.stringify({ viewer_confirm: Array.from(viewerConfirm) }),
-    });
+    let sessRes;
+    try {
+        sessRes = await fetch(`${httpBase}/session${sessionQuery(opts)}`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "X-Zellij-Handshake": handshake,
+            },
+            body: JSON.stringify({ viewer_confirm: Array.from(viewerConfirm) }),
+        });
+    } catch (e) {
+        return fail("Error", `Could not reach the relay at ${httpBase}: ${e.message}`);
+    }
     if (sessRes.status === 401) {
         return fail("Error", "Incorrect or expired secret.");
     } else if (!sessRes.ok) {
         return fail("Error", `Error ${sessRes.status} connecting to relay.`);
     }
-    const body = await sessRes.json();
+    let body;
+    try {
+        body = await sessRes.json();
+    } catch (e) {
+        return fail(
+            "Error",
+            "The relay session endpoint returned a non-JSON response — " +
+                "the reverse proxy in front of the relay is likely misrouting requests."
+        );
+    }
     if (expectedE2e && body.e2e_encrypted !== true) {
         return fail(
             "Refused",
@@ -435,11 +463,15 @@ async function initRelayAuthentication(expectedE2e, opts) {
             "Error",
             "This share link is missing its secret. Ask the host for a fresh guest link.",
         );
-        throw new Error("relay share link has no fragment secret");
+        const err = new Error("relay share link has no fragment secret");
+        err.handled = true;
+        throw err;
     }
     const session = await getClientId(fragmentSecret, false, false, expectedE2e, opts);
     if (!session) {
-        throw new Error("relay authentication rejected");
+        const err = new Error("relay authentication rejected");
+        err.handled = true;
+        throw err;
     }
     return session;
 }
@@ -459,7 +491,9 @@ async function initLocalAuthentication(expectedE2e, opts) {
     });
     const session = await finaliseLocalSession(body, expectedE2e);
     if (!session) {
-        throw new Error("local authentication refused");
+        const err = new Error("local authentication refused");
+        err.handled = true;
+        throw err;
     }
     return session;
 }

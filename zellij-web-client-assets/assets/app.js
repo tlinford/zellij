@@ -1961,6 +1961,9 @@ function buildMenu() {
     changeSession.dataset.role = "change-session";
     changeSession.textContent = "Change Session";
     changeSession.addEventListener("click", () => openOverlay("sessions"));
+    if (isRelayMode()) {
+        changeSession.style.display = "none";
+    }
 
     const sep = document.createElement("div");
     sep.className = "zj-sep";
@@ -2126,6 +2129,13 @@ function installMenuDismissHook() {
 function openOverlay(kind) {
     closeMenu();
     if (state.readOnly && !standalone) {
+        return;
+    }
+    if (
+        (kind === "sessions" || kind === "new-session") &&
+        isRelayMode() &&
+        !standalone
+    ) {
         return;
     }
     state.activeOverlay = kind;
@@ -2765,6 +2775,10 @@ function navigateToSession(name) {
     // unnamed case hands control back to the caller to boot a session in place instead.
     if (standalone && !name) {
         finishStandalone({ createUnnamedSession: true });
+        return;
+    }
+    if (isRelayMode()) {
+        openOverlay(null);
         return;
     }
     const baseUrl = getBaseUrl();

@@ -24,6 +24,27 @@ function fail(title, message) {
     return new Error(message);
 }
 
+function surfaceFatal(message) {
+    if (typeof showErrorModal === "function") {
+        showErrorModal("Connection failed", message);
+        return;
+    }
+    const pre = document.createElement("pre");
+    pre.style.cssText =
+        "color:#fff;background:#000;padding:16px;white-space:pre-wrap;font-size:14px;";
+    pre.textContent = `Connection failed: ${message}`;
+    document.body.replaceChildren(pre);
+}
+
+window.addEventListener("unhandledrejection", (event) => {
+    const reason = event.reason;
+    if (reason && reason.handled) {
+        return;
+    }
+    event.preventDefault();
+    surfaceFatal((reason && reason.message) || String(reason));
+});
+
 function versionedBase(version) {
     return `/v/${encodeURIComponent(version)}`;
 }
@@ -183,7 +204,14 @@ document.addEventListener("DOMContentLoaded", async () => {
         welcome = await resolveLocalWelcome(sessionFromPath);
     }
     if (!session) {
-        session = await initAuthentication({ session: sessionFromPath, welcome });
+        try {
+            session = await initAuthentication({ session: sessionFromPath, welcome });
+        } catch (err) {
+            if (!(err && err.handled)) {
+                surfaceFatal((err && err.message) || "Authentication failed.");
+            }
+            return;
+        }
     }
     if (!isRelayMode() && session.sessionName) {
         if (!location.pathname.endsWith(`/${session.sessionName}`)) {

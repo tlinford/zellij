@@ -144,6 +144,7 @@ xflags::xflags! {
 
         cmd relay-dev {
             optional --https-port port: u16
+            optional --host host: String
         }
     }
 }
@@ -286,6 +287,7 @@ pub struct Build {
 #[derive(Debug)]
 pub struct RelayDev {
     pub https_port: Option<u16>,
+    pub host: Option<String>,
 }
 
 impl Xtask {

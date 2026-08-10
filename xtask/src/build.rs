@@ -515,7 +515,7 @@ pub fn build_wasm_relay_crypto(sh: &Shell, release: bool) -> anyhow::Result<()> 
 
 const DEFAULT_APP_HOST: &str = "zellij.online";
 
-fn derive_relay_authority(app_host: &str) -> String {
+pub(crate) fn derive_relay_authority(app_host: &str) -> String {
     let (host, port) = match app_host.rsplit_once(':') {
         Some((h, p)) if !h.is_empty() && p.chars().all(|c| c.is_ascii_digit()) => (h, Some(p)),
         _ => (app_host, None),
@@ -549,8 +549,8 @@ pub fn stage_app_origin(
     stage_app_origin_inner(sh, out_dir, false, app_host.unwrap_or(DEFAULT_APP_HOST))
 }
 
-pub fn stage_app_origin_dev(sh: &Shell, out_dir: &Path, https_port: u16) -> anyhow::Result<()> {
-    stage_app_origin_inner(sh, out_dir, true, &format!("localhost:{}", https_port))
+pub fn stage_app_origin_dev(sh: &Shell, out_dir: &Path, app_authority: &str) -> anyhow::Result<()> {
+    stage_app_origin_inner(sh, out_dir, true, app_authority)
 }
 
 fn stage_app_origin_inner(
@@ -1029,7 +1029,7 @@ mod app_origin_tests {
         assert_eq!(digest.trim(), zellij_web_client_assets::app_bundle_sha384());
 
         let hashes = std::fs::read_to_string(out.join("RELEASE_HASHES.txt")).unwrap();
-        assert!(hashes.contains(&format!("v/{}/assets/app-entry.js", version)));
+        assert!(hashes.contains(&format!("v/{}/assets/app.js", version)));
 
         let _ = std::fs::remove_dir_all(&out);
     }

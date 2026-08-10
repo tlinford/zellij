@@ -8,6 +8,17 @@ const RELAY_BIND: &str = "127.0.0.1:8765";
 
 pub fn relay_dev(sh: &Shell, flags: crate::flags::RelayDev) -> anyhow::Result<()> {
     let https_port = flags.https_port.unwrap_or(8443);
+    let host = flags.host.clone().unwrap_or_else(|| "localhost".to_string());
+    if host.contains('/') || host.contains(':') {
+        bail!(
+            "--host expects a bare hostname or IPv4 address (no scheme, no port); \
+             the port is taken from --https-port"
+        );
+    }
+    let lan_mode = host != "localhost";
+    let authority = format!("{}:{}", host, https_port);
+    let relay_authority = crate::build::derive_relay_authority(&authority);
+    let same_origin_relay = relay_authority == authority;
 
     if which::which("caddy").is_err() {
         bail!(caddy_missing_message());
@@ -22,7 +33,7 @@ pub fn relay_dev(sh: &Shell, flags: crate::flags::RelayDev) -> anyhow::Result<()
     let stage_wasm_to_assets = false;
     crate::build::build_wasm_clip(sh, build_release_wasm, stage_wasm_to_assets)
         .context("failed to build the zellij-ansi-clip wasm blob")?;
-    crate::build::stage_app_origin_dev(sh, &app_dir, https_port)
+    crate::build::stage_app_origin_dev(sh, &app_dir, &authority)
         .context("failed to stage the app-origin static site")?;
 
     if data_dir.exists() {
@@ -32,12 +43,17 @@ pub fn relay_dev(sh: &Shell, flags: crate::flags::RelayDev) -> anyhow::Result<()
     let token = mint_token(&data_dir).context("failed to mint a relay tunnel-auth token")?;
 
     let caddyfile = dev_dir.join("Caddyfile");
-    std::fs::write(&caddyfile, caddyfile_contents(https_port, &app_dir))
-        .context("failed to write Caddyfile")?;
+    std::fs::write(
+        &caddyfile,
+        caddyfile_contents(&authority, &relay_authority, same_origin_relay, &app_dir),
+    )
+    .context("failed to write Caddyfile")?;
 
-    let app_origin = format!("https://localhost:{}", https_port);
-    let public_url_template = format!("https://localhost:{}/r/{{slug}}", https_port);
+    let app_origin = format!("https://{}", authority);
+    let public_url_template = format!("https://{}/r/{{slug}}", authority);
     let ca_cert_path = dirs_local_share().join("caddy/pki/authorities/local/root.crt");
+
+    clear_stale_leaf_certs(&host, &relay_authority);
 
     let mut caddy = Command::new("caddy")
         .arg("run")
@@ -55,7 +71,15 @@ pub fn relay_dev(sh: &Shell, flags: crate::flags::RelayDev) -> anyhow::Result<()
 
     ensure_ca_trusted(&ca_cert_path, &dev_dir);
 
-    print_instructions(&app_origin, https_port, &token);
+    print_instructions(
+        &app_origin,
+        &relay_authority,
+        https_port,
+        &token,
+        lan_mode,
+        same_origin_relay,
+        &ca_cert_path,
+    );
 
     let relay_status = Command::new(crate::cargo()?)
         .args(["run", "-q", "-p", "zellij-relay-server"])
@@ -70,6 +94,28 @@ pub fn relay_dev(sh: &Shell, flags: crate::flags::RelayDev) -> anyhow::Result<()
     let _ = caddy.wait();
     relay_status.context("relay process failed to run")?;
     Ok(())
+}
+
+fn clear_stale_leaf_certs(host: &str, relay_authority: &str) {
+    let relay_host = relay_authority
+        .rsplit_once(':')
+        .map(|(h, _)| h)
+        .unwrap_or(relay_authority);
+    let base = dirs_local_share().join("caddy/certificates/local");
+    let mut names = vec![host];
+    if relay_host != host {
+        names.push(relay_host);
+    }
+    for name in names {
+        let dir = base.join(name);
+        if dir.is_dir() && std::fs::remove_dir_all(&dir).is_ok() {
+            println!(
+                "relay-dev: cleared cached leaf certificate state for '{}' \
+                 (caddy re-issues it from the existing local CA on first use)",
+                name
+            );
+        }
+    }
 }
 
 fn mint_token(data_dir: &Path) -> anyhow::Result<String> {
@@ -99,8 +145,13 @@ fn mint_token(data_dir: &Path) -> anyhow::Result<String> {
         .context("create-token produced no token on stdout")
 }
 
-fn caddyfile_contents(port: u16, app_dir: &Path) -> String {
-    let tmpl = "\
+fn caddyfile_contents(
+    authority: &str,
+    relay_authority: &str,
+    same_origin_relay: bool,
+    app_dir: &Path,
+) -> String {
+    let head = "\
 {
 	admin off
 	auto_https disable_redirects
@@ -109,30 +160,62 @@ fn caddyfile_contents(port: u16, app_dir: &Path) -> String {
 	}
 }
 
-localhost:PORT {
+";
+    let split_origin_site = "\
+AUTHORITY {
 	root * APP_DIR
 	try_files {path} /index.html
 	file_server
 	tls internal
 }
 
-relay.localhost:PORT {
+RELAY_AUTHORITY {
 	reverse_proxy RELAY_BIND_ADDR
 	tls internal
 }
 ";
-    tmpl.replace("PORT", &port.to_string())
+    let same_origin_site = "\
+AUTHORITY {
+	@relay path_regexp ^/(health$|tunnel/|r/[^/]+/)
+	handle @relay {
+		reverse_proxy RELAY_BIND_ADDR
+	}
+	handle {
+		root * APP_DIR
+		try_files {path} /index.html
+		file_server
+	}
+	tls internal
+}
+";
+    let site = if same_origin_relay {
+        same_origin_site
+    } else {
+        split_origin_site
+    };
+    let mut tmpl = String::from(head);
+    tmpl.push_str(site);
+    tmpl.replace("RELAY_AUTHORITY", relay_authority)
+        .replace("AUTHORITY", authority)
         .replace("APP_DIR", &app_dir.display().to_string())
         .replace("RELAY_BIND_ADDR", RELAY_BIND)
 }
 
-fn print_instructions(app_origin: &str, port: u16, token: &str) {
+fn print_instructions(
+    app_origin: &str,
+    relay_authority: &str,
+    port: u16,
+    token: &str,
+    lan_mode: bool,
+    same_origin_relay: bool,
+    ca_cert_path: &Path,
+) {
     let line = "=".repeat(72);
     println!("\n{line}");
     println!("zellij relay-dev is starting");
     println!("{line}");
     println!("App origin (browser + native, ONE url):  {app_origin}");
-    println!("Relay (browser, via caddy TLS):          wss://relay.localhost:{port}");
+    println!("Relay (browser, via caddy TLS):          wss://{relay_authority}");
     println!("Relay (sharer, direct):                  ws://{RELAY_BIND}");
     println!();
     println!("1. Start a sharer in another terminal:");
@@ -148,6 +231,23 @@ fn print_instructions(app_origin: &str, port: u16, token: &str) {
     println!("3a. Browser: open that url in Firefox.");
     println!("3b. Native:  the SAME url, no flags:");
     println!("     cargo x run -- attach \"{app_origin}/r/<slug>\"");
+    if lan_mode {
+        println!();
+        println!("LAN device access ({app_origin}):");
+        println!("  - allow inbound TCP {port} in this machine's firewall");
+        println!("  - install caddy's root CA on the device before opening the url:");
+        println!("      {}", ca_cert_path.display());
+        println!("    Android: Settings \u{2192} Security & privacy \u{2192} Encryption & credentials");
+        println!("             \u{2192} Install a certificate \u{2192} CA certificate");
+        println!("             (Firefox Android additionally needs 'Use third-party CA");
+        println!("             certificates' enabled in its settings)");
+        println!("    iOS:     send the file, install the profile, then Settings \u{2192} General");
+        println!("             \u{2192} About \u{2192} Certificate Trust Settings \u{2192} enable full trust");
+        if same_origin_relay {
+            println!("  - IP-literal origin: app and relay share ONE origin; the viewer shows");
+            println!("    the same-host security notice \u{2014} expected in this mode");
+        }
+    }
     println!();
     println!("Ctrl-C stops both the relay and caddy.");
     println!("{line}\n");
@@ -323,4 +423,38 @@ TLS setup). Install it, then re-run:
 
 After installing, run `cargo x relay-dev` again."
         .to_string()
+}
+
+#[cfg(test)]
+mod caddyfile_tests {
+    use super::*;
+
+    #[test]
+    fn split_origin_uses_two_vhosts() {
+        let out = caddyfile_contents(
+            "zj.lan:8443",
+            "relay.zj.lan:8443",
+            false,
+            Path::new("/tmp/app"),
+        );
+        assert!(out.contains("zj.lan:8443 {"));
+        assert!(out.contains("relay.zj.lan:8443 {"));
+        assert!(out.contains(&format!("reverse_proxy {}", RELAY_BIND)));
+        assert!(!out.contains("AUTHORITY"));
+    }
+
+    #[test]
+    fn same_origin_routes_relay_paths() {
+        let out = caddyfile_contents(
+            "192.168.1.50:8443",
+            "192.168.1.50:8443",
+            true,
+            Path::new("/tmp/app"),
+        );
+        assert_eq!(out.matches("192.168.1.50:8443 {").count(), 1);
+        assert!(out.contains("@relay path_regexp ^/(health$|tunnel/|r/[^/]+/)"));
+        assert!(out.contains(&format!("reverse_proxy {}", RELAY_BIND)));
+        assert!(out.contains("try_files {path} /index.html"));
+        assert!(!out.contains("AUTHORITY"));
+    }
 }
