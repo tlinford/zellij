@@ -87,6 +87,10 @@ pub fn build(sh: &Shell, flags: flags::Build) -> anyhow::Result<()> {
         build_wasm_clip(sh, /* release */ true, /* stage_to_assets */ false)?;
     }
 
+    if !flags.no_web {
+        crate::assets::assets(sh, crate::flags::Assets { check: false })?;
+    }
+
     // Build non-plugin crates (native target).
     if !flags.plugins_only {
         for WorkspaceMember { crate_name, .. } in crate::workspace_members()
@@ -555,6 +559,8 @@ fn stage_app_origin_inner(
     dev_clip_from_target: bool,
     app_host: &str,
 ) -> anyhow::Result<()> {
+    crate::assets::assets(sh, crate::flags::Assets { check: false })?;
+
     let root = crate::project_root();
     let src = root.join("zellij-web-client-assets").join("assets");
     if !src.is_dir() {

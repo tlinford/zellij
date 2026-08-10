@@ -146,7 +146,13 @@ fn init_db(conn: &Connection) -> Result<()> {
 pub fn hash_relay_tunnel_auth_token(token: &str) -> RelayTunnelAuthTokenHash {
     let mut hasher = Sha256::new();
     hasher.update(token.as_bytes());
-    RelayTunnelAuthTokenHash(format!("{:x}", hasher.finalize()))
+    RelayTunnelAuthTokenHash(
+        hasher
+            .finalize()
+            .iter()
+            .map(|byte| format!("{:02x}", byte))
+            .collect(),
+    )
 }
 
 fn now_epoch() -> i64 {

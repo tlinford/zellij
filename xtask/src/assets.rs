@@ -1,46 +1,36 @@
 //! Deterministic bundling of the web client frontend assets.
 use crate::flags;
 use anyhow::{anyhow, Context};
-use sha2::{Digest, Sha384};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use xshell::Shell;
 
 const MODULE_ORDER: &[&str] = &[
-    "utils",
-    "connection",
-    "auth",
-    "keyboard",
     "links",
     "terminal",
     "ime-bypass",
     "soft-keyboard",
+    "keyboard",
     "key-handler",
     "mouse",
     "pinch",
     "mobile-pan",
     "touch",
     "input",
+    "clip",
     "mobile-ui",
+    "native-promote",
     "websockets",
-    "index",
+    "app-entry",
 ];
 
-const HASHED_ASSETS: &[&str] = &[
-    "app.js",
-    "xterm.js",
-    "addon-fit.js",
-    "addon-clipboard.js",
-    "addon-web-links.js",
-    "addon-webgl.js",
-    "modals.js",
-    "xterm.css",
-    "style.css",
+const BUNDLE_EXPORTS: &[&str] = &[
+    "start",
+    "shouldUseStandaloneMenu",
+    "showStandaloneSessionMenu",
 ];
 
 const BUNDLE_FILE: &str = "app.js";
-const INTEGRITY_FILE: &str = "integrity.json";
-const INDEX_FILE: &str = "index.html";
 
 const DECLARATION_PREFIXES: &[&str] = &[
     "async function ",
@@ -87,46 +77,32 @@ pub fn assets(_sh: &Shell, flags: flags::Assets) -> anyhow::Result<()> {
 }
 
 fn web_assets_dir() -> PathBuf {
-    crate::project_root().join("zellij-client").join("assets")
+    crate::project_root()
+        .join("zellij-web-client-assets")
+        .join("assets")
 }
 
 fn generate(assets_dir: &Path) -> anyhow::Result<Vec<(String, String)>> {
     let bundle = build_bundle(assets_dir)?;
-
-    let mut digests: BTreeMap<String, String> = BTreeMap::new();
-    for asset in HASHED_ASSETS {
-        let bytes = if *asset == BUNDLE_FILE {
-            bundle.as_bytes().to_vec()
-        } else {
-            let path = assets_dir.join(asset);
-            std::fs::read(&path).with_context(|| format!("failed to read '{}'", path.display()))?
-        };
-        digests.insert((*asset).to_string(), subresource_integrity(&bytes));
-    }
-
-    let integrity = format!("{}\n", serde_json::to_string_pretty(&digests)?);
-
-    let index_path = assets_dir.join(INDEX_FILE);
-    let index_source = std::fs::read_to_string(&index_path)
-        .with_context(|| format!("failed to read '{}'", index_path.display()))?;
-    let index = rewrite_integrity_attributes(&index_source, &digests)?;
-
-    Ok(vec![
-        (BUNDLE_FILE.to_string(), bundle),
-        (INTEGRITY_FILE.to_string(), integrity),
-        (INDEX_FILE.to_string(), index),
-    ])
+    Ok(vec![(BUNDLE_FILE.to_string(), bundle)])
 }
 
 fn build_bundle(assets_dir: &Path) -> anyhow::Result<String> {
-    let mut bundle = String::new();
+    let mut body = String::new();
     let mut declarations: BTreeMap<String, String> = BTreeMap::new();
+    let mut external_imports: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
 
     for module in MODULE_ORDER {
         let path = assets_dir.join(format!("{}.js", module));
         let source = std::fs::read_to_string(&path)
             .with_context(|| format!("failed to read '{}'", path.display()))?;
-        let chunk = flatten_module(module, &source)?;
+        let (chunk, externals) = flatten_module(module, &source)?;
+        for (specifier, bindings) in externals {
+            external_imports
+                .entry(specifier)
+                .or_default()
+                .extend(bindings);
+        }
         for name in top_level_declarations(&chunk) {
             if let Some(previous) = declarations.insert(name.clone(), (*module).to_string()) {
                 return Err(anyhow!(
@@ -137,17 +113,43 @@ fn build_bundle(assets_dir: &Path) -> anyhow::Result<String> {
                 ));
             }
         }
-        bundle.push_str(&chunk);
-        if !bundle.ends_with('\n') {
-            bundle.push('\n');
+        body.push_str(&chunk);
+        if !body.ends_with('\n') {
+            body.push('\n');
         }
     }
+
+    for name in BUNDLE_EXPORTS {
+        if !declarations.contains_key(*name) {
+            return Err(anyhow!(
+                "'{}' is exported by the bundle but declared in no bundled module",
+                name
+            ));
+        }
+    }
+
+    let mut bundle = String::new();
+    for (specifier, bindings) in &external_imports {
+        bundle.push_str(&format!(
+            "import {{ {} }} from \"{}\";\n",
+            bindings.iter().cloned().collect::<Vec<String>>().join(", "),
+            specifier
+        ));
+    }
+    if !external_imports.is_empty() {
+        bundle.push('\n');
+    }
+    bundle.push_str(&body);
+    bundle.push_str(&format!("export {{ {} }};\n", BUNDLE_EXPORTS.join(", ")));
 
     Ok(bundle)
 }
 
-fn flatten_module(module: &str, source: &str) -> anyhow::Result<String> {
+type ExternalImport = (String, Vec<String>);
+
+fn flatten_module(module: &str, source: &str) -> anyhow::Result<(String, Vec<ExternalImport>)> {
     let mut out = String::new();
+    let mut externals: Vec<ExternalImport> = Vec::new();
     let mut lines = source.lines().enumerate().peekable();
 
     while let Some((index, line)) = lines.next() {
@@ -159,14 +161,20 @@ fn flatten_module(module: &str, source: &str) -> anyhow::Result<String> {
 
         if let Some(rest) = line.strip_prefix("import ") {
             if is_terminated_import(rest) {
-                validate_module_specifier(rest, &location())?;
+                if validate_module_specifier(rest, &location())? {
+                    externals.push(parse_external_import(line, &location())?);
+                }
                 continue;
             }
+            let mut statement = vec![line.to_string()];
             let mut terminated = false;
             for (_, continuation) in lines.by_ref() {
                 let trimmed = continuation.trim_start();
+                statement.push(continuation.to_string());
                 if trimmed.starts_with("} from ") && trimmed.ends_with(';') {
-                    validate_module_specifier(trimmed, &location())?;
+                    if validate_module_specifier(trimmed, &location())? {
+                        externals.push(parse_external_import(&statement.join(" "), &location())?);
+                    }
                     terminated = true;
                     break;
                 }
@@ -207,7 +215,32 @@ fn flatten_module(module: &str, source: &str) -> anyhow::Result<String> {
         out.push('\n');
     }
 
-    Ok(out)
+    Ok((out, externals))
+}
+
+fn parse_external_import(statement: &str, location: &str) -> anyhow::Result<ExternalImport> {
+    let (bindings, specifier) = statement
+        .rsplit_once(" from ")
+        .ok_or_else(|| anyhow!("missing module specifier at {}", location))?;
+    let specifier = specifier
+        .trim()
+        .trim_end_matches(';')
+        .trim_matches(|c| c == '"' || c == '\'')
+        .to_string();
+    let bindings = bindings
+        .trim()
+        .trim_start_matches("import")
+        .trim()
+        .trim_start_matches('{')
+        .trim_end_matches('}')
+        .split(',')
+        .map(|binding| binding.trim().to_string())
+        .filter(|binding| !binding.is_empty())
+        .collect::<Vec<String>>();
+    if bindings.is_empty() {
+        return Err(anyhow!("no named bindings in import at {}", location));
+    }
+    Ok((specifier, bindings))
 }
 
 fn is_terminated_import(rest: &str) -> bool {
@@ -224,7 +257,7 @@ fn is_import_binding_line(trimmed: &str) -> bool {
         .all(|c| c.is_alphanumeric() || c == '_' || c == '$' || c == ' ')
 }
 
-fn validate_module_specifier(line: &str, location: &str) -> anyhow::Result<()> {
+fn validate_module_specifier(line: &str, location: &str) -> anyhow::Result<bool> {
     let specifier = line
         .rsplit_once(" from ")
         .map(|(_, specifier)| specifier)
@@ -233,12 +266,37 @@ fn validate_module_specifier(line: &str, location: &str) -> anyhow::Result<()> {
         .trim_end_matches(';')
         .trim_matches(|c| c == '"' || c == '\'');
 
+    if let Some(name) = specifier
+        .strip_prefix("/assets/")
+        .and_then(|name| name.strip_suffix(".js"))
+    {
+        if MODULE_ORDER.contains(&name) {
+            return Err(anyhow!(
+                "bundled module '{}' must be imported as './{}.js', not '{}', at {}",
+                name,
+                name,
+                specifier,
+                location
+            ));
+        }
+        if !zellij_web_client_assets::manifest::HANDSHAKE_CORE_ASSET_NAMES
+            .contains(&format!("{}.js", name).as_str())
+        {
+            return Err(anyhow!(
+                "'{}' referenced at {} is neither a bundled module nor a handshake-core asset",
+                specifier,
+                location
+            ));
+        }
+        return Ok(true);
+    }
+
     let name = specifier
         .strip_prefix("./")
         .and_then(|name| name.strip_suffix(".js"))
         .ok_or_else(|| {
             anyhow!(
-                "only relative sibling module specifiers are supported, found '{}' at {}",
+                "only './<module>.js' and '/assets/<core>.js' specifiers are supported, found '{}' at {}",
                 specifier,
                 location
             )
@@ -251,7 +309,7 @@ fn validate_module_specifier(line: &str, location: &str) -> anyhow::Result<()> {
             location
         ));
     }
-    Ok(())
+    Ok(false)
 }
 
 fn top_level_declarations(chunk: &str) -> Vec<String> {
@@ -277,127 +335,68 @@ fn top_level_declarations(chunk: &str) -> Vec<String> {
     names
 }
 
-fn subresource_integrity(bytes: &[u8]) -> String {
-    let mut hasher = Sha384::new();
-    hasher.update(bytes);
-    format!("sha384-{}", base64_encode(&hasher.finalize()))
-}
-
-fn base64_encode(input: &[u8]) -> String {
-    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
-    for chunk in input.chunks(3) {
-        let b0 = chunk[0] as u32;
-        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
-        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
-        let triple = (b0 << 16) | (b1 << 8) | b2;
-        out.push(TABLE[((triple >> 18) & 0x3f) as usize] as char);
-        out.push(TABLE[((triple >> 12) & 0x3f) as usize] as char);
-        if chunk.len() > 1 {
-            out.push(TABLE[((triple >> 6) & 0x3f) as usize] as char);
-        } else {
-            out.push('=');
-        }
-        if chunk.len() > 2 {
-            out.push(TABLE[(triple & 0x3f) as usize] as char);
-        } else {
-            out.push('=');
-        }
-    }
-    out
-}
-
-fn rewrite_integrity_attributes(
-    source: &str,
-    digests: &BTreeMap<String, String>,
-) -> anyhow::Result<String> {
-    let mut out = String::with_capacity(source.len());
-    let trailing_newline = source.ends_with('\n');
-
-    for line in source.lines() {
-        let mut rewritten = line.to_string();
-        if let Some(asset) = referenced_asset(line, digests) {
-            let digest = &digests[&asset];
-            rewritten = replace_integrity_value(&rewritten, digest).ok_or_else(|| {
-                anyhow!(
-                    "tag referencing '{}' is missing an integrity attribute",
-                    asset
-                )
-            })?;
-        }
-        out.push_str(&rewritten);
-        out.push('\n');
-    }
-
-    if !trailing_newline {
-        out.pop();
-    }
-    Ok(out)
-}
-
-fn referenced_asset(line: &str, digests: &BTreeMap<String, String>) -> Option<String> {
-    for asset in digests.keys() {
-        for attribute in ["src=\"assets/", "href=\"assets/"] {
-            let needle = format!("{}{}\"", attribute, asset);
-            if line.contains(&needle) {
-                return Some(asset.clone());
-            }
-        }
-    }
-    None
-}
-
-fn replace_integrity_value(line: &str, digest: &str) -> Option<String> {
-    let start = line.find("integrity=\"")? + "integrity=\"".len();
-    let end = start + line[start..].find('"')?;
-    let mut out = String::with_capacity(line.len() + digest.len());
-    out.push_str(&line[..start]);
-    out.push_str(digest);
-    out.push_str(&line[end..]);
-    Some(out)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn import_statements_are_dropped() {
-        let source = "import { a } from \"./utils.js\";\nexport function b() {}\n";
-        let flattened = flatten_module("terminal", source).expect("flatten");
+    fn sibling_imports_are_dropped() {
+        let source = "import { a } from \"./links.js\";\nexport function b() {}\n";
+        let (flattened, externals) = flatten_module("terminal", source).expect("flatten");
         assert_eq!(flattened, "function b() {}\n");
+        assert!(externals.is_empty());
+    }
+
+    #[test]
+    fn handshake_core_imports_are_preserved() {
+        let source = "import { getBaseUrl } from \"/assets/utils.js\";\nconst c = 1;\n";
+        let (flattened, externals) = flatten_module("terminal", source).expect("flatten");
+        assert_eq!(flattened, "const c = 1;\n");
+        assert_eq!(
+            externals,
+            vec![(
+                "/assets/utils.js".to_string(),
+                vec!["getBaseUrl".to_string()]
+            )]
+        );
     }
 
     #[test]
     fn multiline_imports_are_dropped() {
-        let source = "import {\n    a,\n    b,\n} from \"./utils.js\";\nconst c = 1;\n";
-        let flattened = flatten_module("terminal", source).expect("flatten");
+        let source = "import {\n    a,\n    b,\n} from \"./links.js\";\nconst c = 1;\n";
+        let (flattened, _) = flatten_module("terminal", source).expect("flatten");
         assert_eq!(flattened, "const c = 1;\n");
     }
 
     #[test]
     fn re_exports_are_dropped() {
         let source = "export { setSoftKeyboard } from \"./soft-keyboard.js\";\n";
-        let flattened = flatten_module("input", source).expect("flatten");
+        let (flattened, _) = flatten_module("input", source).expect("flatten");
         assert_eq!(flattened, "");
     }
 
     #[test]
     fn unsupported_export_forms_are_rejected() {
-        assert!(flatten_module("utils", "export default function a() {}\n").is_err());
-        assert!(flatten_module("utils", "export * from \"./links.js\";\n").is_err());
-        assert!(flatten_module("utils", "export unexpected;\n").is_err());
+        assert!(flatten_module("terminal", "export default function a() {}\n").is_err());
+        assert!(flatten_module("terminal", "export * from \"./links.js\";\n").is_err());
+        assert!(flatten_module("terminal", "export unexpected;\n").is_err());
     }
 
     #[test]
     fn unknown_module_specifiers_are_rejected() {
-        assert!(flatten_module("utils", "import { a } from \"nowhere\";\n").is_err());
-        assert!(flatten_module("utils", "import { a } from \"./nowhere.js\";\n").is_err());
+        assert!(flatten_module("terminal", "import { a } from \"nowhere\";\n").is_err());
+        assert!(flatten_module("terminal", "import { a } from \"./nowhere.js\";\n").is_err());
+        assert!(flatten_module("terminal", "import { a } from \"/assets/nowhere.js\";\n").is_err());
+    }
+
+    #[test]
+    fn bundled_modules_may_not_be_imported_through_the_assets_path() {
+        assert!(flatten_module("input", "import { a } from \"/assets/terminal.js\";\n").is_err());
     }
 
     #[test]
     fn dynamic_imports_are_rejected() {
-        assert!(flatten_module("utils", "const m = await import(\"./utils.js\");\n").is_err());
+        assert!(flatten_module("terminal", "const m = await import(\"./links.js\");\n").is_err());
     }
 
     #[test]
@@ -406,7 +405,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create temp dir");
         for module in MODULE_ORDER {
-            let contents = if *module == "utils" || *module == "connection" {
+            let contents = if *module == "links" || *module == "terminal" {
                 "function collide() {}\n"
             } else {
                 ""
@@ -429,24 +428,4 @@ mod tests {
         assert_eq!(top_level_declarations(chunk), vec!["outer", "top"]);
     }
 
-    #[test]
-    fn integrity_attributes_are_rewritten() {
-        let mut digests = BTreeMap::new();
-        digests.insert("app.js".to_string(), "sha384-abc".to_string());
-        let source = "<script type=\"module\" src=\"assets/app.js\" integrity=\"\"></script>\n";
-        let rewritten = rewrite_integrity_attributes(source, &digests).expect("rewrite");
-        assert_eq!(
-            rewritten,
-            "<script type=\"module\" src=\"assets/app.js\" integrity=\"sha384-abc\"></script>\n"
-        );
-    }
-
-    #[test]
-    fn base64_matches_known_vectors() {
-        assert_eq!(base64_encode(b""), "");
-        assert_eq!(base64_encode(b"f"), "Zg==");
-        assert_eq!(base64_encode(b"fo"), "Zm8=");
-        assert_eq!(base64_encode(b"foo"), "Zm9v");
-        assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
-    }
 }

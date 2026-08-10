@@ -502,9 +502,8 @@ pub(crate) enum InputInstruction {
 #[cfg(feature = "web_server_capability")]
 #[cfg(unix)]
 fn os_hostname() -> Option<String> {
-    let mut buf = [0u8; 256];
-    let cstr = nix::unistd::gethostname(&mut buf).ok()?;
-    let name = cstr.to_str().ok()?.trim().to_string();
+    let raw = nix::unistd::gethostname().ok()?;
+    let name = raw.to_str()?.trim().to_string();
     if name.is_empty() {
         None
     } else {
@@ -535,7 +534,7 @@ fn encode_control_out(
             ) {
                 Ok(ct) => {
                     *seq += 1;
-                    Some(Message::Binary(ct))
+                    Some(Message::Binary(ct.into()))
                 },
                 Err(e) => {
                     log::error!("e2e control encrypt failed: {} — dropping frame", e);
@@ -543,7 +542,7 @@ fn encode_control_out(
                 },
             }
         },
-        None => Some(Message::Text(json)),
+        None => Some(Message::Text(json.into())),
     }
 }
 
@@ -951,7 +950,7 @@ pub async fn run_remote_client_terminal_loop(
                         };
                         match tokio::time::timeout(
                             std::time::Duration::from_secs(ATTACH_WS_SEND_TIMEOUT_SECS),
-                            connections.terminal_ws.send(Message::Binary(payload)),
+                            connections.terminal_ws.send(Message::Binary(payload.into())),
                         )
                         .await
                         {
@@ -1114,7 +1113,7 @@ pub async fn run_remote_client_terminal_loop(
                     let send_timeout = std::time::Duration::from_secs(ATTACH_WS_SEND_TIMEOUT_SECS);
                     match tokio::time::timeout(
                         send_timeout,
-                        connections.terminal_ws.send(Message::Ping(payload.clone())),
+                        connections.terminal_ws.send(Message::Ping(payload.clone().into())),
                     )
                     .await
                     {
@@ -1126,7 +1125,7 @@ pub async fn run_remote_client_terminal_loop(
                     }
                     match tokio::time::timeout(
                         send_timeout,
-                        connections.control_ws.send(Message::Ping(payload)),
+                        connections.control_ws.send(Message::Ping(payload.into())),
                     )
                     .await
                     {
@@ -1221,7 +1220,7 @@ pub async fn run_remote_client_terminal_loop(
                                 }
                             }
                         } else {
-                            data
+                            data.to_vec()
                         };
                         // First clean decrypt under E2E unlocks stdin
                         // transmission. In the non-E2E path this is a
@@ -1287,7 +1286,7 @@ pub async fn run_remote_client_terminal_loop(
                             log::warn!("got plaintext control Text frame under E2E — dropping");
                             None
                         } else {
-                            Some(msg)
+                            Some(msg.to_string())
                         }
                     }
                     Some(Ok(Message::Binary(data))) => {

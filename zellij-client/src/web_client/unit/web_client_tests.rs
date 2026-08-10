@@ -2900,62 +2900,16 @@ mod web_client_tests {
             "index.html must declare a theme-color meta tag"
         );
         assert!(
-            !body.contains("<base "),
-            "index.html must not declare a <base href>"
+            body.contains("<base href="),
+            "index.html must declare a <base href> so a reverse-proxied base_url resolves"
         );
         assert!(
-            !body.contains("data-authenticated"),
-            "index.html must not carry a data-authenticated hint"
+            body.contains("src=\"assets/core-bootstrap.js\""),
+            "index.html must load the handshake-core bootstrap module"
         );
         assert!(
-            body.contains("src=\"assets/app.js\""),
-            "index.html must load the bundled app.js module"
-        );
-
-        let integrity_url = format!("http://127.0.0.1:{}/assets/integrity.json", port);
-        let mut integrity_response = fetch_url(integrity_url).await;
-        let integrity: serde_json::Value =
-            serde_json::from_str(&integrity_response.text().expect("Failed to read integrity"))
-                .expect("integrity.json must be valid JSON");
-        let integrity = integrity
-            .as_object()
-            .expect("integrity.json must be an object");
-
-        let mut checked = 0;
-        for line in body.lines() {
-            let Some(attribute_start) = line
-                .find("src=\"assets/")
-                .map(|index| index + "src=\"assets/".len())
-                .or_else(|| {
-                    line.find("href=\"assets/")
-                        .map(|index| index + "href=\"assets/".len())
-                })
-            else {
-                continue;
-            };
-            let asset = &line
-                [attribute_start..attribute_start + line[attribute_start..].find('"').unwrap()];
-            let Some(expected) = integrity.get(asset) else {
-                continue;
-            };
-            let expected = expected.as_str().expect("digest must be a string");
-            let digest_start = line
-                .find("integrity=\"")
-                .map(|index| index + "integrity=\"".len())
-                .unwrap_or_else(|| panic!("missing integrity attribute for {}", asset));
-            let digest =
-                &line[digest_start..digest_start + line[digest_start..].find('"').unwrap()];
-            assert_eq!(
-                digest, expected,
-                "integrity attribute for {} does not match integrity.json",
-                asset
-            );
-            checked += 1;
-        }
-        assert_eq!(
-            checked,
-            integrity.len(),
-            "every hashed asset must be referenced with an integrity attribute"
+            !body.contains("src=\"assets/app.js\""),
+            "the application bundle is loaded by the bootstrap after admission, not from index.html"
         );
 
         server_handle.abort();

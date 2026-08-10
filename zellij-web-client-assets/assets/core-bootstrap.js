@@ -1,5 +1,9 @@
 import { initConnectionHandlers } from "./connection.js";
-import { initAuthentication, deviceReconnectSession } from "./auth.js";
+import {
+    initAuthentication,
+    deviceReconnectSession,
+    fetchSessionList,
+} from "./auth.js";
 import { isRelayMode, getRelayTarget, getRelayIsolation } from "./utils.js";
 import { sha384Base64 } from "./crypto.js";
 import { openControlAndAwaitVersion } from "./core-control.js";
@@ -119,7 +123,20 @@ async function loadApplicationBundle(version, manifest) {
         moduleNames.map((name) => injectModulePreload(`${base}/${name}`, integrity[name]))
     );
 
-    return import(`${base}/app-entry.js`);
+    return import(`${base}/app.js`);
+}
+
+async function resolveLocalWelcome(sessionFromPath) {
+    if (sessionFromPath) {
+        return true;
+    }
+    const mobileUi = await import("./app.js");
+    if (!mobileUi.shouldUseStandaloneMenu()) {
+        return true;
+    }
+    document.title = "Zellij";
+    await mobileUi.showStandaloneSessionMenu({ fetchSessions: fetchSessionList });
+    return false;
 }
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -129,6 +146,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     let serverUrl = null;
     let deviceReconnect = false;
     let deviceRecord = null;
+    const sessionFromPath = isRelayMode()
+        ? null
+        : location.pathname.split("/").pop();
+    let welcome = true;
     if (isRelayMode()) {
         serverUrl = getRelayTarget().httpBase;
         const isolation = getRelayIsolation();
@@ -158,9 +179,16 @@ document.addEventListener("DOMContentLoaded", async () => {
                 deviceRecord = null;
             }
         }
+    } else {
+        welcome = await resolveLocalWelcome(sessionFromPath);
     }
     if (!session) {
-        session = await initAuthentication();
+        session = await initAuthentication({ session: sessionFromPath, welcome });
+    }
+    if (!isRelayMode() && session.sessionName) {
+        if (!location.pathname.endsWith(`/${session.sessionName}`)) {
+            history.replaceState(null, "", session.sessionName);
+        }
     }
     if (isRelayMode()) {
         session.device = {
@@ -189,7 +217,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
     } else {
         await loadLocalLibraries();
-        const app = await import("./app-entry.js");
+        const app = await import("./app.js");
         await app.start({ session });
     }
 });

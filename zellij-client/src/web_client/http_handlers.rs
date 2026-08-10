@@ -6,9 +6,9 @@ use crate::web_client::types::{
 use crate::web_client::utils::parse_cookies;
 use zellij_browser_bridge::protocol::DisplayConfig;
 use axum::{
-    extract::{Path as AxumPath, Query, State},
+    extract::{Path as AxumPath, Query, Request, State},
     http::{header, StatusCode},
-    response::IntoResponse,
+    response::{Html, IntoResponse},
     Json,
 };
 use axum_extra::extract::cookie::{Cookie, SameSite};
@@ -157,9 +157,13 @@ pub async fn create_new_client(
         .create()
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(e.to_string())))?;
 
-    state
-        .bridge
-        .admit(viewer_id.clone(), link, is_read_only, session_token_hash.0);
+    state.bridge.admit(
+        viewer_id.clone(),
+        link,
+        is_read_only,
+        false,
+        session_token_hash.0,
+    );
 
     // Derive + stash the per-client E2E key when the opt-in is on. Missing
     // `auth_token_hash` here means the auth middleware could not look it
@@ -196,6 +200,8 @@ pub async fn create_new_client(
         config,
         e2e_encrypted,
         tunnel_id: state.local_tunnel_id.clone(),
+        session_rows: 0,
+        session_cols: 0,
     }))
 }
 

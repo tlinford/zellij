@@ -4,7 +4,7 @@
 pub struct PluginCommand {
     #[prost(enumeration="CommandName", tag="1")]
     pub name: i32,
-    #[prost(oneof="plugin_command::Payload", tags="2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 168, 169, 170, 171")]
+    #[prost(oneof="plugin_command::Payload", tags="2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 168, 169, 170, 171, 176, 172, 173, 174, 175")]
     pub payload: ::core::option::Option<plugin_command::Payload>,
 }
 /// Nested message and enum types in `PluginCommand`.
@@ -320,7 +320,49 @@ pub mod plugin_command {
         SetPaneFrameStylePayload(super::SetPaneFrameStylePayload),
         #[prost(message, tag="171")]
         ToggleFloatingPanesPayload(super::ToggleFloatingPanesPayload),
+        #[prost(message, tag="176")]
+        SetRelayTunnelAuthTokenPayload(super::SetRelayTunnelAuthTokenPayload),
+        #[prost(message, tag="172")]
+        RelayMintGuestLinkPayload(super::RelayMintGuestLinkPayload),
+        #[prost(message, tag="173")]
+        RelayRevokeGuestLinkPayload(super::RelayRevokeGuestLinkPayload),
+        #[prost(message, tag="174")]
+        RelayResolveAdmissionPayload(super::RelayResolveAdmissionPayload),
+        #[prost(message, tag="175")]
+        RelayRevokeDevicePayload(super::RelayRevokeDevicePayload),
     }
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SetRelayTunnelAuthTokenPayload {
+    #[prost(string, tag="1")]
+    pub token: ::prost::alloc::string::String,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RelayMintGuestLinkPayload {
+    #[prost(bool, tag="1")]
+    pub read_only: bool,
+    #[prost(string, tag="2")]
+    pub label: ::prost::alloc::string::String,
+    #[prost(bool, tag="3")]
+    pub enroll: bool,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RelayRevokeGuestLinkPayload {
+    #[prost(bytes="vec", tag="1")]
+    pub link_id: ::prost::alloc::vec::Vec<u8>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RelayResolveAdmissionPayload {
+    #[prost(uint32, tag="1")]
+    pub client_id: u32,
+    #[prost(bool, tag="2")]
+    pub admit: bool,
+    #[prost(bool, tag="3")]
+    pub code_confirmed: bool,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -333,6 +375,12 @@ pub struct SetPaneFrameStylePayload {
 pub struct ToggleFloatingPanesPayload {
     #[prost(uint64, optional, tag="1")]
     pub tab_id: ::core::option::Option<u64>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RelayRevokeDevicePayload {
+    #[prost(bytes="vec", tag="1")]
+    pub device_id: ::prost::alloc::vec::Vec<u8>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1093,6 +1141,116 @@ pub struct ListTokensResponse {
     #[prost(bool, repeated, tag="3")]
     pub read_only_flags: ::prost::alloc::vec::Vec<bool>,
     #[prost(string, optional, tag="4")]
+    pub error: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RelayGuestLinkInfo {
+    #[prost(bytes="vec", tag="1")]
+    pub link_id: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag="2")]
+    pub label: ::prost::alloc::string::String,
+    #[prost(bool, tag="3")]
+    pub read_only: bool,
+    #[prost(string, tag="4")]
+    pub url: ::prost::alloc::string::String,
+    #[prost(bool, tag="5")]
+    pub enroll: bool,
+    #[prost(bool, tag="6")]
+    pub spent: bool,
+    #[prost(bool, tag="7")]
+    pub active: bool,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RelayMintGuestLinkResponse {
+    #[prost(message, optional, tag="1")]
+    pub link: ::core::option::Option<RelayGuestLinkInfo>,
+    #[prost(string, optional, tag="2")]
+    pub error: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RelayRevokeGuestLinkResponse {
+    #[prost(bool, tag="1")]
+    pub revoked: bool,
+    #[prost(string, optional, tag="2")]
+    pub error: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RelayListGuestLinksResponse {
+    #[prost(message, repeated, tag="1")]
+    pub links: ::prost::alloc::vec::Vec<RelayGuestLinkInfo>,
+    #[prost(string, optional, tag="2")]
+    pub error: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RelayPendingAdmissionInfo {
+    #[prost(uint32, tag="1")]
+    pub client_id: u32,
+    #[prost(string, tag="2")]
+    pub sas: ::prost::alloc::string::String,
+    #[prost(string, tag="3")]
+    pub label: ::prost::alloc::string::String,
+    #[prost(bool, tag="4")]
+    pub read_only: bool,
+    #[prost(string, optional, tag="5")]
+    pub claimed_name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(bool, tag="6")]
+    pub contested: bool,
+    #[prost(uint32, tag="7")]
+    pub seconds_remaining: u32,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RelayListPendingAdmissionsResponse {
+    #[prost(message, repeated, tag="1")]
+    pub admissions: ::prost::alloc::vec::Vec<RelayPendingAdmissionInfo>,
+    #[prost(string, optional, tag="2")]
+    pub error: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RelayResolveAdmissionResponse {
+    #[prost(bool, tag="1")]
+    pub resolved: bool,
+    #[prost(string, optional, tag="2")]
+    pub error: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RelayDeviceInfo {
+    #[prost(bytes="vec", tag="1")]
+    pub device_id: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag="2")]
+    pub label: ::prost::alloc::string::String,
+    #[prost(bool, tag="3")]
+    pub read_only: bool,
+    #[prost(enumeration="DeviceScope", tag="4")]
+    pub scope: i32,
+    #[prost(uint64, optional, tag="5")]
+    pub last_used: ::core::option::Option<u64>,
+    #[prost(enumeration="DeviceStorageLevel", tag="6")]
+    pub storage_level: i32,
+    #[prost(bool, tag="7")]
+    pub connected: bool,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RelayListDevicesResponse {
+    #[prost(message, repeated, tag="1")]
+    pub devices: ::prost::alloc::vec::Vec<RelayDeviceInfo>,
+    #[prost(string, optional, tag="2")]
+    pub error: ::core::option::Option<::prost::alloc::string::String>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RelayRevokeDeviceResponse {
+    #[prost(bool, tag="1")]
+    pub revoked: bool,
+    #[prost(string, optional, tag="2")]
     pub error: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -2227,6 +2385,16 @@ pub enum CommandName {
     NewPane = 226,
     ToggleFocusNoUiFullscreen = 227,
     FocusHostSession = 228,
+    ShareCurrentSessionToRelay = 229,
+    StopSharingCurrentSessionFromRelay = 230,
+    SetRelayTunnelAuthToken = 231,
+    RelayMintGuestLink = 232,
+    RelayRevokeGuestLink = 233,
+    RelayListGuestLinks = 234,
+    RelayListPendingAdmissions = 235,
+    RelayResolveAdmission = 236,
+    RelayListDevices = 237,
+    RelayRevokeDevice = 238,
 }
 impl CommandName {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -2438,6 +2606,16 @@ impl CommandName {
             CommandName::NewPane => "NewPane",
             CommandName::ToggleFocusNoUiFullscreen => "ToggleFocusNoUiFullscreen",
             CommandName::FocusHostSession => "FocusHostSession",
+            CommandName::ShareCurrentSessionToRelay => "ShareCurrentSessionToRelay",
+            CommandName::StopSharingCurrentSessionFromRelay => "StopSharingCurrentSessionFromRelay",
+            CommandName::SetRelayTunnelAuthToken => "SetRelayTunnelAuthToken",
+            CommandName::RelayMintGuestLink => "RelayMintGuestLink",
+            CommandName::RelayRevokeGuestLink => "RelayRevokeGuestLink",
+            CommandName::RelayListGuestLinks => "RelayListGuestLinks",
+            CommandName::RelayListPendingAdmissions => "RelayListPendingAdmissions",
+            CommandName::RelayResolveAdmission => "RelayResolveAdmission",
+            CommandName::RelayListDevices => "RelayListDevices",
+            CommandName::RelayRevokeDevice => "RelayRevokeDevice",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -2646,6 +2824,16 @@ impl CommandName {
             "NewPane" => Some(Self::NewPane),
             "ToggleFocusNoUiFullscreen" => Some(Self::ToggleFocusNoUiFullscreen),
             "FocusHostSession" => Some(Self::FocusHostSession),
+            "ShareCurrentSessionToRelay" => Some(Self::ShareCurrentSessionToRelay),
+            "StopSharingCurrentSessionFromRelay" => Some(Self::StopSharingCurrentSessionFromRelay),
+            "SetRelayTunnelAuthToken" => Some(Self::SetRelayTunnelAuthToken),
+            "RelayMintGuestLink" => Some(Self::RelayMintGuestLink),
+            "RelayRevokeGuestLink" => Some(Self::RelayRevokeGuestLink),
+            "RelayListGuestLinks" => Some(Self::RelayListGuestLinks),
+            "RelayListPendingAdmissions" => Some(Self::RelayListPendingAdmissions),
+            "RelayResolveAdmission" => Some(Self::RelayResolveAdmission),
+            "RelayListDevices" => Some(Self::RelayListDevices),
+            "RelayRevokeDevice" => Some(Self::RelayRevokeDevice),
             _ => None,
         }
     }
@@ -2730,6 +2918,55 @@ impl FixedOrPercent {
         match value {
             "Fixed" => Some(Self::Fixed),
             "Percent" => Some(Self::Percent),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum DeviceScope {
+    Session = 0,
+    Host = 1,
+}
+impl DeviceScope {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            DeviceScope::Session => "DEVICE_SCOPE_SESSION",
+            DeviceScope::Host => "DEVICE_SCOPE_HOST",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "DEVICE_SCOPE_SESSION" => Some(Self::Session),
+            "DEVICE_SCOPE_HOST" => Some(Self::Host),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum DeviceStorageLevel {
+    FilePermsOnly = 0,
+}
+impl DeviceStorageLevel {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            DeviceStorageLevel::FilePermsOnly => "DEVICE_STORAGE_LEVEL_FILE_PERMS_ONLY",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "DEVICE_STORAGE_LEVEL_FILE_PERMS_ONLY" => Some(Self::FilePermsOnly),
             _ => None,
         }
     }

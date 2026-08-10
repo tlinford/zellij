@@ -33,7 +33,7 @@ pub async fn open_control_tunnel(
         requested_slug,
         read_only,
     };
-    sink.send(Message::Binary(auth.encode()))
+    sink.send(Message::Binary(auth.encode().into()))
         .await
         .context("sending TunnelAuth")?;
 
@@ -44,8 +44,8 @@ pub async fn open_control_tunnel(
         .context("reading first frame from relay control socket")?;
 
     let bytes = match next {
-        Message::Binary(b) => b,
-        Message::Text(t) => t.into_bytes(),
+        Message::Binary(b) => b.to_vec(),
+        Message::Text(t) => t.as_bytes().to_vec(),
         Message::Close(_) => {
             return Err(anyhow!("relay closed control socket during handshake"));
         },

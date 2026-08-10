@@ -4,8 +4,26 @@ use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 
 use crate::control_frame::ControlFrame;
-use crate::protocol::{control_payload_to_server_msg, FromBrowser, ToBrowser};
+use crate::protocol::{
+    control_payload_to_server_msg, FromBrowser, ToBrowser,
+    WebClientToWebServerControlMessagePayload,
+};
 use crate::virtual_client::SessionLink;
+
+fn payload_allowed(
+    payload: &WebClientToWebServerControlMessagePayload,
+    read_only: bool,
+    relay_fanout: bool,
+) -> bool {
+    use WebClientToWebServerControlMessagePayload as P;
+    if !read_only {
+        return true;
+    }
+    if relay_fanout {
+        return false;
+    }
+    matches!(payload, P::SoftKeyboardVisibilityChanged { .. })
+}
 
 const CLOSE_CODE_NORMAL: u16 = 1000;
 const CLOSE_CODE_DO_NOT_RECONNECT: u16 = 4001;
@@ -29,6 +47,7 @@ impl std::fmt::Display for ViewerId {
 pub struct Viewer {
     pub id: ViewerId,
     pub read_only: bool,
+    pub relay_fanout: bool,
     link: Box<dyn SessionLink>,
     control_out: Option<UnboundedSender<ControlFrame>>,
     terminal_out: Option<UnboundedSender<String>>,
@@ -37,10 +56,16 @@ pub struct Viewer {
 }
 
 impl Viewer {
-    fn new(id: ViewerId, link: Box<dyn SessionLink>, read_only: bool) -> Self {
+    fn new(
+        id: ViewerId,
+        link: Box<dyn SessionLink>,
+        read_only: bool,
+        relay_fanout: bool,
+    ) -> Self {
         Viewer {
             id,
             read_only,
+            relay_fanout,
             link,
             control_out: None,
             terminal_out: None,
@@ -80,6 +105,14 @@ impl Viewer {
                 return;
             },
         };
+        if !payload_allowed(&msg.payload, self.read_only, self.relay_fanout) {
+            log::warn!(
+                "Rejecting control message from read-only viewer {}: {:?}",
+                self.id,
+                msg.payload
+            );
+            return;
+        }
         let Some(client_msg) = control_payload_to_server_msg(msg.payload) else {
             return;
         };
@@ -99,10 +132,13 @@ impl ViewerRoster {
         id: ViewerId,
         link: Box<dyn SessionLink>,
         read_only: bool,
+        relay_fanout: bool,
         token_hash: String,
     ) {
-        self.viewers
-            .insert(id.clone(), Viewer::new(id.clone(), link, read_only));
+        self.viewers.insert(
+            id.clone(),
+            Viewer::new(id.clone(), link, read_only, relay_fanout),
+        );
         self.token_hash.insert(id, token_hash);
     }
 

@@ -124,10 +124,10 @@ vte = { version = "0.15", default-features = false, features = ["std"] }
 windows-sys = { version = "0.59", default-features = false }
 names = { version = "0.14.0", default-features = false }
 include_dir = { version = "0.7.3", default-features = false }
-sha2 = { version = "0.10", default-features = false }
-hkdf = { version = "0.12", default-features = false }
+sha2 = { version = "0.11", default-features = false }
+hkdf = { version = "0.13", default-features = false }
 aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
-hmac = { version = "0.12", default-features = false }
+hmac = { version = "0.13", default-features = false }
 spake2 = { version = "0.4", default-features = false, features = ["std", "getrandom"] }
 ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 argon2 = { version = "0.5", default-features = false, features = ["alloc"] }

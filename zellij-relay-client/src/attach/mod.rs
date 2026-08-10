@@ -415,7 +415,7 @@ fn authenticate_with_retry(
             None => Password::new()
                 .with_prompt("Enter authentication token")
                 .interact()
-                .map_err(|e| RemoteClientError::IoError(e))?,
+                .map_err(|e| RemoteClientError::IoError(std::io::Error::other(e)))?,
         };
 
         let ca_cert_owned = ca_cert.map(|p| p.to_path_buf());
@@ -495,7 +495,7 @@ fn authenticate_with_retry(
                         return Err(RemoteClientError::InvalidAuthToken);
                     },
                     Err(e) => {
-                        return Err(RemoteClientError::IoError(e));
+                        return Err(RemoteClientError::IoError(std::io::Error::other(e)));
                     },
                 }
             },
@@ -608,8 +608,16 @@ async fn remote_attach(
     let server_base_url = extract_server_url(server_url)?;
     let session_name = extract_session_name(server_url)?;
     let auth_result =
-        auth::authenticate(&server_base_url, auth_token, remember_me, ca_cert, insecure, link_id)
-            .await?;
+        auth::authenticate(
+            &server_base_url,
+            auth_token,
+            remember_me,
+            &session_name,
+            ca_cert,
+            insecure,
+            link_id,
+        )
+        .await?;
     let relay_keys = auth_result.relay_keys.clone();
     let e2e_key = if relay_keys.is_some() {
         None
@@ -657,6 +665,7 @@ async fn remote_attach_with_session_token(
         &server_base_url,
         &saved.cookie_name,
         &saved.cookie_value,
+        &session_name,
         ca_cert,
         insecure,
     )
@@ -715,7 +724,11 @@ fn derive_e2e_key_if_needed(
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
     hasher.update(raw_token.as_bytes());
-    let token_hash_hex = format!("{:x}", hasher.finalize());
+    let token_hash_hex: String = hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{:02x}", byte))
+        .collect();
     Some(crypto::derive_key(&token_hash_hex, tunnel_id))
 }
 

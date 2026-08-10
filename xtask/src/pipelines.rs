@@ -327,6 +327,7 @@ pub fn publish(sh: &Shell, flags: flags::Publish) -> anyhow::Result<()> {
                 wasm_clip: true,
                 app_origin: None,
                 app_host: None,
+                args: vec![],
             },
         )
         .context(err_context)?;

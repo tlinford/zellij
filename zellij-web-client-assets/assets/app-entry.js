@@ -1,33 +1,50 @@
-import { initTerminal } from "./terminal.js";
+import { initTerminal, settleFontSize } from "./terminal.js";
 import { setupInputHandlers } from "./input.js";
 import { initWebSockets } from "./websockets.js";
+import { initMobileUi } from "./mobile-ui.js";
+import { isRelayMode } from "/assets/utils.js";
 
 export async function start({ session, controlChannel, bufferedControl }) {
-    const { webClientId, e2e, isReadOnly, sessionRows, sessionCols, handshake } = session;
+    const {
+        webClientId,
+        e2e,
+        isReadOnly,
+        sessionRows,
+        sessionCols,
+        handshake,
+        config,
+    } = session;
 
-    const { term, fitAddon } = initTerminal();
-    const sessionName = location.pathname.split("/").pop();
+    const { term, fitAddon } = initTerminal(config);
+    settleFontSize(term, fitAddon, config);
 
-    let sendAnsiKey = (ansiKey) => {};
+    const sessionName = isRelayMode()
+        ? location.pathname.split("/").pop()
+        : session.sessionName || location.pathname.split("/").pop();
 
-    setupInputHandlers(term, fitAddon, sendAnsiKey);
+    let websockets = null;
+    initMobileUi({
+        term,
+        fitAddon,
+        isReadOnly: !!isReadOnly,
+        getSendAnsiKey: () => (websockets ? websockets.sendAnsiKey : () => {}),
+    });
 
     document.title = sessionName;
-    const websockets = initWebSockets(
+    websockets = initWebSockets(
         webClientId,
         sessionName,
         term,
         fitAddon,
-        sendAnsiKey,
+        () => {},
         e2e,
-        { isReadOnly, sessionRows, sessionCols },
+        { isReadOnly, sessionRows, sessionCols, config },
         handshake,
         controlChannel,
         bufferedControl
     );
 
-    sendAnsiKey = websockets.sendAnsiKey;
-    setupInputHandlers(term, fitAddon, sendAnsiKey);
+    setupInputHandlers(term, fitAddon, websockets.sendAnsiKey);
 
     return websockets;
 }

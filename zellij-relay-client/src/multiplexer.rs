@@ -234,7 +234,7 @@ where
                 frame = rx.recv() => match frame {
                     Some(bytes) => {
                         if sink
-                            .send(TungsteniteMessage::Binary(bytes))
+                            .send(TungsteniteMessage::Binary(bytes.into()))
                             .await
                             .is_err()
                         {
@@ -246,7 +246,7 @@ where
                 ping = ping_rx.recv() => match ping {
                     Some(payload) => {
                         if sink
-                            .send(TungsteniteMessage::Ping(payload))
+                            .send(TungsteniteMessage::Ping(payload.into()))
                             .await
                             .is_err()
                         {
@@ -278,8 +278,8 @@ where
             // activity; refresh the watchdog clock before dispatch.
             last_activity.store(now_millis(), Ordering::Relaxed);
             let bytes = match frame {
-                Ok(TungsteniteMessage::Binary(b)) => b,
-                Ok(TungsteniteMessage::Text(t)) => t.into_bytes(),
+                Ok(TungsteniteMessage::Binary(b)) => b.to_vec(),
+                Ok(TungsteniteMessage::Text(t)) => t.as_bytes().to_vec(),
                 Ok(TungsteniteMessage::Close(_)) => break,
                 Ok(_) => continue,
                 Err(e) => {
@@ -366,8 +366,8 @@ where
         while let Some(frame) = stream.next().await {
             last_activity.store(now_millis(), Ordering::Relaxed);
             let bytes = match frame {
-                Ok(TungsteniteMessage::Binary(b)) => b,
-                Ok(TungsteniteMessage::Text(t)) => t.into_bytes(),
+                Ok(TungsteniteMessage::Binary(b)) => b.to_vec(),
+                Ok(TungsteniteMessage::Text(t)) => t.as_bytes().to_vec(),
                 Ok(TungsteniteMessage::Close(_)) => break,
                 Ok(_) => continue,
                 Err(e) => {

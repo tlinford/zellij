@@ -172,6 +172,12 @@ function makeDeviceCore(session, serverUrl, onExit) {
                     onExit();
                     return true;
                 }
+                case "MobileState": {
+                    if (msg.payload) {
+                        window.__zjLastMobileState = msg.payload;
+                    }
+                    return false;
+                }
                 default:
                     return false;
             }

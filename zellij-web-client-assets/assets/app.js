@@ -1,367 +1,8 @@
-/**
- * Utility functions for the terminal web client
- */
+import { handleDisconnected, handleReconnection, markConnectionEstablished } from "/assets/connection.js";
+import { DIRECTION_SHARER_TO_VIEWER, DIRECTION_VIEWER_TO_SHARER, FRAME_TYPE_CONTROL, FRAME_TYPE_TERMINAL, decrypt, decryptSeq, encrypt, encryptSeq, verifyWasmDigest } from "/assets/crypto.js";
+import { WASM_INTEGRITY } from "/assets/integrity.js";
+import { getBaseUrl, getWsApiBase, isCurrentLocation, isMac, isMobileViewport, isRelayMode } from "/assets/utils.js";
 
-/**
- * Check if the current page is served over HTTPS
- * @returns {boolean} true if protocol is https:, false otherwise
- */
-function is_https() {
-    return document.location.protocol === "https:";
-}
-
-function isMac() {
-    if (navigator.userAgentData && navigator.userAgentData.platform) {
-        return navigator.userAgentData.platform === "macOS";
-    }
-    return navigator.platform.toUpperCase().includes("MAC");
-}
-
-/**
- * Get the application base URL, derived from the location of this module.
- * Modules are always served from `<base>/assets/<file>.js`, so stripping the
- * trailing `/assets/<file>.js` yields the mount point of the web client.
- * @returns {string} Base URL without a trailing slash
- */
-function getBaseUrl() {
-    try {
-        const moduleUrl = new URL(import.meta.url);
-        const path = moduleUrl.pathname.replace(/\/assets\/[^/]*$/, "");
-        return `${moduleUrl.origin}${path}`.replace(/\/$/, "");
-    } catch (_) {
-        return window.location.origin;
-    }
-}
-
-/**
- * Check whether a target URL points at the page already being displayed,
- * ignoring the query string and fragment.
- * @param {string} target absolute or relative URL
- * @returns {boolean} true if navigating there would only reload the page
- */
-function isCurrentLocation(target) {
-    try {
-        const targetUrl = new URL(target, window.location.href);
-        const stripTrailingSlash = (path) => path.replace(/\/$/, "");
-        return (
-            targetUrl.origin === window.location.origin &&
-            stripTrailingSlash(targetUrl.pathname) ===
-                stripTrailingSlash(window.location.pathname)
-        );
-    } catch (_) {
-        return false;
-    }
-}
-
-/**
- * Detect a mobile viewport (coarse pointer + small width, or a mobile UA).
- * @returns {boolean} true if the current viewport is considered mobile
- */
-function isMobileViewport() {
-    return (
-        (window.matchMedia &&
-            window.matchMedia("(pointer: coarse)").matches &&
-            window.innerWidth < 600) ||
-        /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)
-    );
-}
-
-/**
- * Get the application base URL converted to a WebSocket URL
- * @returns {string} WebSocket base URL
- */
-function getWebSocketBaseUrl() {
-    return getBaseUrl().replace(/^https?/, is_https() ? "wss" : "ws");
-}
-/**
- * Connection-related utility functions and management
- */
-
-
-// Connection state
-let reconnectionAttempt = 0;
-let isReconnecting = false;
-let isDisconnected = false;
-let reconnectionTimeout = null;
-let hasConnectedBefore = false;
-let isPageUnloading = false;
-
-/**
- * Get the delay for reconnection attempts using exponential backoff
- * @param {number} attempt - The current attempt number (1-based)
- * @returns {number} The delay in seconds
- */
-function getReconnectionDelay(attempt) {
-    const delays = [1, 2, 4, 8, 16];
-    return delays[Math.min(attempt - 1, delays.length - 1)];
-}
-
-/**
- * Check if the server connection is available
- * @returns {Promise<boolean>} true if connection is OK, false otherwise
- */
-async function checkConnection() {
-    try {
-        const baseUrl = getBaseUrl();
-        const response = await fetch(`${baseUrl}/info/version`, {
-            method: "GET",
-            timeout: 5000,
-        });
-        return response.ok;
-    } catch (error) {
-        return false;
-    }
-}
-
-/**
- * Handle intentional disconnection by the host (close code 4001)
- * @returns {Promise<void>}
- */
-async function handleDisconnected() {
-    if (isDisconnected || isPageUnloading) {
-        return;
-    }
-    isDisconnected = true;
-    await showErrorModal("Disconnected", "You have been disconnected by the host.");
-    isDisconnected = false;
-}
-
-/**
- * Handle reconnection attempts with exponential backoff
- * @returns {Promise<void>}
- */
-async function handleReconnection() {
-    if (isReconnecting || !hasConnectedBefore || isPageUnloading) {
-        return;
-    }
-
-    isReconnecting = true;
-    let currentModal = null;
-
-    while (isReconnecting) {
-        reconnectionAttempt++;
-        const delaySeconds = getReconnectionDelay(reconnectionAttempt);
-
-        const result = await showReconnectionModal(
-            reconnectionAttempt,
-            delaySeconds
-        );
-
-        if (result.action === "cancel") {
-            if (result.cleanup) result.cleanup();
-            isReconnecting = false;
-            reconnectionAttempt = 0;
-            return;
-        }
-
-        if (result.action === "reconnect") {
-            currentModal = result.modal;
-            const connectionOk = await checkConnection();
-
-            if (connectionOk) {
-                if (result.cleanup) result.cleanup();
-                isReconnecting = false;
-                reconnectionAttempt = 0;
-                window.location.reload();
-                return;
-            } else {
-                if (result.cleanup) result.cleanup();
-                continue;
-            }
-        }
-    }
-}
-
-/**
- * Initialize connection handlers and event listeners
- */
-function initConnectionHandlers() {
-    window.addEventListener("beforeunload", () => {
-        isPageUnloading = true;
-    });
-
-    window.addEventListener("pagehide", () => {
-        isPageUnloading = true;
-    });
-}
-
-/**
- * Mark that a connection has been established
- */
-function markConnectionEstablished() {
-    hasConnectedBefore = true;
-}
-
-/**
- * Reset connection state
- */
-function resetConnectionState() {
-    reconnectionAttempt = 0;
-    isReconnecting = false;
-    isDisconnected = false;
-    reconnectionTimeout = null;
-    hasConnectedBefore = false;
-    isPageUnloading = false;
-}
-/**
- * Authentication logic and token management
- */
-
-
-/**
- * Wait for user to provide a security token
- * @returns {Promise<{token: string, remember: boolean}>}
- */
-async function waitForSecurityToken() {
-    let token = null;
-    let remember = null;
-
-    while (!token) {
-        let result = await getSecurityToken();
-        if (result) {
-            token = result.token;
-            remember = result.remember;
-        } else {
-            await showErrorModal(
-                "Error",
-                "Must provide security token in order to log in."
-            );
-        }
-    }
-
-    return { token, remember };
-}
-
-/**
- * Perform the login exchange with the server
- * @param {string} token - Authentication token
- * @param {boolean} rememberMe - Remember login preference
- * @returns {Promise<boolean>} true when the login succeeded
- */
-async function login(token, rememberMe) {
-    const baseUrl = getBaseUrl();
-    let login_res = await fetch(`${baseUrl}/command/login`, {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-            auth_token: token,
-            remember_me: rememberMe ? true : false,
-        }),
-        credentials: "include",
-    });
-
-    if (login_res.status === 401) {
-        await showErrorModal("Error", "Unauthorized or revoked login token.");
-        return false;
-    } else if (!login_res.ok) {
-        await showErrorModal(
-            "Error",
-            `Error ${login_res.status} connecting to server.`
-        );
-        return false;
-    }
-    return true;
-}
-
-/**
- * Perform a request, authenticating and retrying for as long as it is rejected.
- * @param {string} url - Absolute URL to request
- * @param {Object} options - fetch options, merged over the credentialed defaults
- * @returns {Promise<Response>} The successful response
- */
-async function authorizedFetch(url, options = {}) {
-    while (true) {
-        const response = await fetch(url, {
-            credentials: "include",
-            ...options,
-        });
-
-        if (response.ok) {
-            return response;
-        }
-
-        if (response.status !== 401) {
-            await showErrorModal(
-                "Error",
-                `Error ${response.status} connecting to server.`
-            );
-        }
-
-        const { token, remember } = await waitForSecurityToken();
-        await login(token, remember);
-    }
-}
-
-/**
- * Request a session from the server, authenticating first if required.
- * @param {string} sessionFromPath - Session name taken from the URL path
- * @param {Object} options - `{ welcome: boolean }`, welcome defaulting to true
- * @returns {Promise<Object>} The full session bootstrap payload
- */
-async function fetchSession(sessionFromPath, options = {}) {
-    const baseUrl = getBaseUrl();
-    const params = new URLSearchParams();
-    if (sessionFromPath) {
-        params.set("session", sessionFromPath);
-    }
-    if (options.welcome === false) {
-        params.set("welcome", "false");
-    }
-    const query = params.toString() ? `?${params.toString()}` : "";
-
-    const response = await authorizedFetch(`${baseUrl}/session${query}`, {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-        },
-    });
-    return await response.json();
-}
-
-/**
- * Fetch the list of live sessions without attaching to any of them.
- * @returns {Promise<Array<Object>>} The session descriptors
- */
-async function fetchSessionList() {
-    const baseUrl = getBaseUrl();
-    const response = await authorizedFetch(`${baseUrl}/session-list`, {
-        method: "GET",
-    });
-    const payload = await response.json();
-    return payload.sessions || [];
-}
-/**
- * Keyboard handling functions
- */
-
-/**
- * Encode a keyboard event into kitty protocol ANSI escape sequence
- * @param {KeyboardEvent} ev - The keyboard event to encode
- * @param {function} send_ansi_key - Function to send the ANSI key sequence
- */
-function encode_kitty_key(ev, send_ansi_key) {
-    let shift_value = 1;
-    let alt_value = 2;
-    let ctrl_value = 4;
-    let super_value = 8;
-    let modifier_string = 1;
-    if (ev.shiftKey) {
-        modifier_string += shift_value;
-    }
-    if (ev.altKey) {
-        modifier_string += alt_value;
-    }
-    if (ev.ctrlKey) {
-        modifier_string += ctrl_value;
-    }
-    if (ev.metaKey) {
-        modifier_string += super_value;
-    }
-    let key_code = ev.key.charCodeAt(0);
-    send_ansi_key(`\x1b[${key_code};${modifier_string}u`);
-}
 /**
  * Link handling functions for terminal
  */
@@ -911,6 +552,36 @@ function setSoftKeyboard(term, on) {
 
 function toggleSoftKeyboard(term) {
     setSoftKeyboard(term, !window.__zjSoftKbdEnabled);
+}
+/**
+ * Keyboard handling functions
+ */
+
+/**
+ * Encode a keyboard event into kitty protocol ANSI escape sequence
+ * @param {KeyboardEvent} ev - The keyboard event to encode
+ * @param {function} send_ansi_key - Function to send the ANSI key sequence
+ */
+function encode_kitty_key(ev, send_ansi_key) {
+    let shift_value = 1;
+    let alt_value = 2;
+    let ctrl_value = 4;
+    let super_value = 8;
+    let modifier_string = 1;
+    if (ev.shiftKey) {
+        modifier_string += shift_value;
+    }
+    if (ev.altKey) {
+        modifier_string += alt_value;
+    }
+    if (ev.ctrlKey) {
+        modifier_string += ctrl_value;
+    }
+    if (ev.metaKey) {
+        modifier_string += super_value;
+    }
+    let key_code = ev.key.charCodeAt(0);
+    send_ansi_key(`\x1b[${key_code};${modifier_string}u`);
 }
 
 function installCustomKeyHandler(term, sendFunction) {
@@ -1587,6 +1258,72 @@ function setupInputHandlers(term, fitAddon, sendFunction) {
         sendFunction(buffer);
     });
 }
+/**
+ * Thin wrapper around the `zellij-ansi-clip` wasm module.
+ *
+ * The module is loaded once per page and reused for every r/o viewer
+ * instance on the tab. `createClipper` returns handles that own a
+ * per-viewer `ClipState` — one grid, one cursor, one SGR attribute
+ * stream — allocated inside the shared wasm memory.
+ */
+
+
+let wasmExports = null;
+
+async function loadWasm() {
+    if (wasmExports) return wasmExports;
+    const resp = await fetch(new URL("clip.wasm", import.meta.url));
+    if (!resp.ok) {
+        throw new Error(`clip.wasm fetch failed: ${resp.status}`);
+    }
+    const buf = await resp.arrayBuffer();
+    await verifyWasmDigest(WASM_INTEGRITY["clip.wasm"], "clip.wasm", buf);
+    const mod = await WebAssembly.instantiate(buf, {});
+    wasmExports = mod.instance.exports;
+    return wasmExports;
+}
+
+/**
+ * Instantiate a new clipper at the given session viewport.
+ * @param {string} baseUrl - page base, used to resolve `clip.wasm`.
+ * @param {number} sessionRows
+ * @param {number} sessionCols
+ * @returns {Promise<{apply: (Uint8Array) => void, emit: (number, number) => Uint8Array, resizeSession: (number, number) => void, free: () => void}>}
+ */
+async function createClipper(baseUrl, sessionRows, sessionCols) {
+    const w = await loadWasm();
+    let state = w.clip_new(sessionRows, sessionCols);
+
+    return {
+        apply(bytes) {
+            if (!bytes || bytes.length === 0) return;
+            const ptr = w.clip_alloc(bytes.length);
+            new Uint8Array(w.memory.buffer, ptr, bytes.length).set(bytes);
+            w.clip_apply(state, ptr, bytes.length);
+            w.clip_free(ptr, bytes.length);
+        },
+        emit(viewerRows, viewerCols) {
+            const outLenPtr = w.clip_alloc(4);
+            const resultPtr = w.clip_emit(state, viewerRows, viewerCols, outLenPtr);
+            const outLen = new Uint32Array(w.memory.buffer, outLenPtr, 1)[0];
+            // Copy out of wasm memory before freeing so the caller is free
+            // to re-enter the wasm module without clobbering the slice.
+            const out = new Uint8Array(w.memory.buffer, resultPtr, outLen).slice();
+            w.clip_free(resultPtr, outLen);
+            w.clip_free(outLenPtr, 4);
+            return out;
+        },
+        resizeSession(rows, cols) {
+            w.clip_resize_session(state, rows, cols);
+        },
+        free() {
+            if (state !== null) {
+                w.clip_free_state(state);
+                state = null;
+            }
+        },
+    };
+}
 
 const DARK_PALETTE = {
     "--zj-green": "#A3BD8D",
@@ -1618,8 +1355,17 @@ function paletteDeclarations(palette) {
         .join("\n      ");
 }
 
+const WRITE_CLASS_CONTROL = new Set([
+    "RequestSessionList",
+    "FocusPane",
+    "NewPaneInTab",
+    "NewTab",
+    "SetMobileRenderPreferences",
+]);
+
 const state = {
     active: false,
+    readOnly: false,
     standalone: false,
     renderMode: "full",
     initialPrefsSent: false,
@@ -1637,9 +1383,19 @@ let activityTimer = null;
 let initialized = false;
 let standalone = null;
 
+function resolveReadOnly(context) {
+    if (context && typeof context.isReadOnly === "boolean") {
+        return context.isReadOnly;
+    }
+    const el = document.getElementById("zellij-is-read-only");
+    return !!el && el.value === "true";
+}
+
 function initMobileUi(context) {
     ctx = context;
+    state.readOnly = resolveReadOnly(context);
     if (initialized) {
+        render();
         return;
     }
     initialized = true;
@@ -1831,7 +1587,12 @@ function evaluateActivation() {
 // browser is a web client, but only this UI knows whether it activated, so the intent is sent
 // from here once the control channel exists.
 function sendInitialRenderPrefs() {
-    if (state.initialPrefsSent || !state.active || !window.__zjSendControl) {
+    if (
+        state.initialPrefsSent ||
+        !state.active ||
+        state.readOnly ||
+        !window.__zjSendControl
+    ) {
         return false;
     }
     state.initialPrefsSent = true;
@@ -2192,10 +1953,12 @@ function buildMenu() {
     });
 
     const changePane = document.createElement("button");
+    changePane.dataset.role = "change-pane";
     changePane.textContent = "Change Pane";
     changePane.addEventListener("click", () => openOverlay("panes"));
 
     const changeSession = document.createElement("button");
+    changeSession.dataset.role = "change-session";
     changeSession.textContent = "Change Session";
     changeSession.addEventListener("click", () => openOverlay("sessions"));
 
@@ -2362,6 +2125,9 @@ function installMenuDismissHook() {
 
 function openOverlay(kind) {
     closeMenu();
+    if (state.readOnly && !standalone) {
+        return;
+    }
     state.activeOverlay = kind;
     render();
     if (kind === "panes" || kind === "sessions") {
@@ -2379,6 +2145,9 @@ function openOverlay(kind) {
 }
 
 function sendControl(payload) {
+    if (state.readOnly && WRITE_CLASS_CONTROL.has(payload && payload.type)) {
+        return;
+    }
     if (window.__zjSendControl) {
         window.__zjSendControl(payload);
     }
@@ -2625,6 +2394,8 @@ function render() {
 
     els.sessionBtn.textContent = state.data.session_name || "session";
     els.paneBtn.textContent = activePaneLabel();
+    els.sessionBtn.style.display = state.readOnly ? "none" : "";
+    els.paneBtn.style.display = state.readOnly ? "none" : "";
 
     renderMenu();
     renderModifierBar();
@@ -2662,6 +2433,18 @@ function renderMenu() {
     if (!els.menu.classList.contains("zj-open")) {
         return;
     }
+    for (const role of [
+        "render-toggle",
+        "fit-toggle",
+        "change-pane",
+        "change-session",
+    ]) {
+        const el = els.menu.querySelector(`[data-role="${role}"]`);
+        if (el) {
+            el.style.display = state.readOnly ? "none" : "";
+        }
+    }
+
     const renderToggle = els.menu.querySelector('[data-role="render-toggle"]');
     renderToggle.textContent = `${checkbox(
         state.renderMode === "single-pane"
@@ -2679,7 +2462,7 @@ function renderMenu() {
 }
 
 function renderModifierBar() {
-    const visible = state.active && state.kbdVisible;
+    const visible = state.active && state.kbdVisible && !state.readOnly;
     els.modbar.classList.toggle("zj-visible", visible);
     for (const cell of MOD_CELLS) {
         const btn = els.modbar.querySelector(`[data-cell="${cell.id}"]`);
@@ -2720,6 +2503,9 @@ function renderSessionsHeader() {
 function setupPanesFooter() {
     const footer = els.panes._parts.footer;
     footer.innerHTML = "";
+    if (state.readOnly) {
+        return;
+    }
     const newTab = document.createElement("button");
     newTab.textContent = "+ New Tab";
     newTab.addEventListener("click", () => {
@@ -2745,6 +2531,9 @@ function setupPanesFooter() {
 function setupSessionsFooter() {
     const footer = els.sessions._parts.footer;
     footer.innerHTML = "";
+    if (state.readOnly) {
+        return;
+    }
     const newSession = document.createElement("button");
     newSession.textContent = "+ New Session";
     newSession.addEventListener("click", () => openOverlay("new-session"));
@@ -2839,6 +2628,9 @@ function renderCard(kind, item, indices) {
     meta.textContent = item.meta;
     card.append(title, meta);
     card.addEventListener("click", () => {
+        if (state.readOnly) {
+            return;
+        }
         if (kind === "sessions") {
             navigateToSession(item.name);
         } else {
@@ -3001,8 +2793,77 @@ function emptyMobileState() {
         },
     };
 }
+/**
+ * Native-client promotion banner for the relay viewer.
+ *
+ * The native client (`zellij attach <url>`) is the strongest tier: its
+ * crypto runs in the local binary and it never loads app-origin code, so it
+ * holds even against a malicious relay. This surfaces the exact command
+ * derived from the current join URL (fragment secret included) with a copy
+ * button. Shown only on the relay viewer; never on the local web client.
+ */
+
+
+function nativeCommand() {
+    return `zellij attach "${location.href}"`;
+}
+
+function mount() {
+    if (!isRelayMode()) {
+        return;
+    }
+    if (document.getElementById("zellij-native-promote")) {
+        return;
+    }
+
+    const bar = document.createElement("div");
+    bar.id = "zellij-native-promote";
+
+    const label = document.createElement("span");
+    label.className = "znp-label";
+    label.textContent = "Open in Zellij (recommended for sensitive sessions):";
+
+    const code = document.createElement("code");
+    code.className = "znp-cmd";
+    code.textContent = nativeCommand();
+
+    const copy = document.createElement("button");
+    copy.className = "znp-copy";
+    copy.type = "button";
+    copy.textContent = "Copy";
+    copy.addEventListener("click", async () => {
+        try {
+            await navigator.clipboard.writeText(nativeCommand());
+            copy.textContent = "Copied";
+        } catch (_) {
+            copy.textContent = "Copy failed";
+        }
+    });
+
+    const note = document.createElement("span");
+    note.className = "znp-note";
+    note.textContent = "The native client holds even against a malicious relay.";
+
+    const dismiss = document.createElement("button");
+    dismiss.className = "znp-dismiss";
+    dismiss.type = "button";
+    dismiss.setAttribute("aria-label", "Dismiss");
+    dismiss.textContent = "✕";
+    dismiss.addEventListener("click", () => bar.remove());
+
+    bar.append(label, code, copy, note, dismiss);
+    document.body.prepend(bar);
+}
+
+if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", mount);
+} else {
+    mount();
+}
 
 let lastSentCellDimensions = null;
+
+const READ_ONLY_ALLOWED_CONTROL = new Set(["SoftKeyboardVisibilityChanged"]);
 
 function getCellPixelDimensions(term) {
     try {
@@ -3032,20 +2893,18 @@ function getMobileRenderSizing() {
         : { pinned: false };
 }
 
-function sendSizeUpdate(wsControl, ownWebClientId, term, rows, cols) {
-    if (!wsControl || !ownWebClientId) {
+function sendSizeUpdate(controlSend, ownWebClientId, term, rows, cols) {
+    if (!controlSend || !ownWebClientId) {
         return;
     }
-    wsControl.send(
-        JSON.stringify({
-            web_client_id: ownWebClientId,
-            payload: {
-                type: "TerminalResize",
-                rows,
-                cols,
-            },
-        })
-    );
+    controlSend({
+        web_client_id: ownWebClientId,
+        payload: {
+            type: "TerminalResize",
+            rows,
+            cols,
+        },
+    });
     const cell = getCellPixelDimensions(term);
     if (!cell) {
         return;
@@ -3060,84 +2919,288 @@ function sendSizeUpdate(wsControl, ownWebClientId, term, rows, cols) {
         return;
     }
     lastSentCellDimensions = { width: cellWidth, height: cellHeight };
-    wsControl.send(
-        JSON.stringify({
-            web_client_id: ownWebClientId,
-            payload: {
-                type: "TerminalMetrics",
-                cell_pixel_width: cellWidth,
-                cell_pixel_height: cellHeight,
-                text_area_pixel_width: Math.round(cols * cell.width),
-                text_area_pixel_height: Math.round(rows * cell.height),
-            },
-        })
-    );
+    controlSend({
+        web_client_id: ownWebClientId,
+        payload: {
+            type: "TerminalMetrics",
+            cell_pixel_width: cellWidth,
+            cell_pixel_height: cellHeight,
+            text_area_pixel_width: Math.round(cols * cell.width),
+            text_area_pixel_height: Math.round(rows * cell.height),
+        },
+    });
 }
 
-function initWebSockets(boot, term, fitAddon) {
-    const ownWebClientId = boot.web_client_id;
-    const sessionName = boot.session_name;
+/**
+ * Initialize both terminal and control WebSocket connections
+ * @param {string} webClientId - Client ID from authentication
+ * @param {string} sessionName - Session name from URL
+ * @param {Terminal} term - Terminal instance
+ * @param {FitAddon} fitAddon - Terminal fit addon
+ * @param {function} sendAnsiKey - Function to send ANSI key sequences
+ * @param {?{key: CryptoKey}} e2e - E2E encryption state, or null/undefined for plain
+ *   Populated for relay r/o viewers. Triggers client-side clipping + resize
+ * @returns {object} Object containing WebSocket instances and cleanup function
+ */
+function initWebSockets(
+    webClientId,
+    sessionName,
+    term,
+    fitAddon,
+    sendAnsiKey,
+    e2e,
+    roViewer,
+    handshake,
+    controlChannel,
+    bufferedControl
+) {
+    const handshakeQuery = handshake
+        ? `&handshake=${encodeURIComponent(handshake)}`
+        : "";
+    let ownWebClientId = "";
     let wsTerminal;
     let wsControl;
+    const bootConfig = (roViewer && roViewer.config) || null;
     const userConfig = { blink: false, style: false };
-    if (boot.config) {
-        if (typeof boot.config.cursor_blink !== "undefined") {
+    if (bootConfig) {
+        if (typeof bootConfig.cursor_blink !== "undefined") {
             userConfig.blink = true;
         }
-        if (typeof boot.config.cursor_style !== "undefined") {
+        if (typeof bootConfig.cursor_style !== "undefined") {
             userConfig.style = true;
         }
     }
+    const textDecoder = new TextDecoder();
+    const textEncoder = new TextEncoder();
 
-    const wsBaseUrl = getWebSocketBaseUrl();
-    const url =
-        !sessionName || sessionName === ""
-            ? `${wsBaseUrl}/ws/terminal`
-            : `${wsBaseUrl}/ws/terminal/${encodeURIComponent(sessionName)}`;
+    const relay = e2e && e2e.relay ? e2e.relay : null;
+    let terminalOutSeq = 0;
+    let terminalSendChain = Promise.resolve();
+    const makeWindow = () => {
+        let last = -1;
+        return (seq) => {
+            if (seq <= last) {
+                return false;
+            }
+            last = seq;
+            return true;
+        };
+    };
+    const terminalInWindow = makeWindow();
+    const controlSend = controlChannel
+        ? (obj) => controlChannel.send(obj)
+        : (obj) => {
+              if (wsControl) {
+                  wsControl.send(JSON.stringify(obj));
+              }
+          };
+
+    const isReadOnly = !!(roViewer && roViewer.isReadOnly);
+    const isRelayWatcher = isReadOnly && isRelayMode();
+    // Clipping is only used for the legacy shared-stream fan-out, which is
+    // signalled by a non-zero session size. Under the E2E per-viewer model
+    // each read-only viewer gets its own correctly-sized render stream, so
+    // the relay reports size 0 and we render it like any normal client —
+    // input is still gated below by `isReadOnly`.
+    const useClipper = isReadOnly && !!(roViewer && (roViewer.sessionRows || 0) > 0);
+    let clipper = null;
+    const pendingFrames = [];
+    let clipperReady = false;
+
+    if (useClipper) {
+        const baseUrl = `${getBaseUrl()}/`;
+        // 0 sentinels mean "session size not yet known at login time" —
+        // use a reasonable default and let the first `SessionSizeChanged`
+        // control message overwrite.
+        const initialRows = roViewer.sessionRows || 24;
+        const initialCols = roViewer.sessionCols || 80;
+        createClipper(baseUrl, initialRows, initialCols)
+            .then((c) => {
+                clipper = c;
+                clipperReady = true;
+                for (const buf of pendingFrames) {
+                    clipper.apply(buf);
+                }
+                pendingFrames.length = 0;
+                term.write(clipper.emit(term.rows, term.cols));
+            })
+            .catch((err) => {
+                console.error("clip.wasm load failed:", err);
+            });
+    }
 
     const fitDimensions = fitAddon.proposeDimensions() || {
         rows: term.rows,
         cols: term.cols,
     };
-    if (
-        fitDimensions.rows !== term.rows ||
-        fitDimensions.cols !== term.cols
-    ) {
+    if (fitDimensions.rows !== term.rows || fitDimensions.cols !== term.cols) {
         term.resize(fitDimensions.cols, fitDimensions.rows);
     }
-    const cell = getCellPixelDimensions(term);
-    let queryString = `?web_client_id=${encodeURIComponent(ownWebClientId)}&rows=${term.rows}&cols=${term.cols}`;
-    if (cell) {
-        const cellWidth = Math.round(cell.width);
-        const cellHeight = Math.round(cell.height);
+
+    if (controlChannel) {
+        adoptControlChannel(
+            controlChannel,
+            term,
+            fitAddon,
+            webClientId,
+            userConfig,
+            isReadOnly,
+            () => clipper,
+            controlSend
+        );
+    }
+
+    const wsBaseUrl = getWsApiBase();
+    const url =
+        !sessionName || sessionName === ""
+            ? `${wsBaseUrl}/ws/terminal`
+            : `${wsBaseUrl}/ws/terminal/${sessionName}`;
+
+    let queryString = `?web_client_id=${encodeURIComponent(webClientId)}&rows=${term.rows}&cols=${term.cols}`;
+    const bootCell = getCellPixelDimensions(term);
+    if (bootCell) {
+        const cellWidth = Math.round(bootCell.width);
+        const cellHeight = Math.round(bootCell.height);
         queryString += `&cell_width=${cellWidth}&cell_height=${cellHeight}`;
         lastSentCellDimensions = { width: cellWidth, height: cellHeight };
     }
+    queryString += handshakeQuery;
     const wsTerminalUrl = `${url}${queryString}`;
 
-    wsTerminal = new WebSocket(wsTerminalUrl);
+    // The control socket is opened up front so the server never has to hold
+    // back state it produces before the browser is listening. It carries no
+    // STDIN; keystroke transmission stays gated on the first decrypted frame
+    // via `ownWebClientId` below. In relay mode the channel already exists
+    // (opened for admission before the application bundle loaded) and is
+    // adopted above instead.
+    if (!controlChannel) {
+        const wsControlUrl = `${wsBaseUrl}/ws/control?web_client_id=${encodeURIComponent(
+            webClientId
+        )}${handshakeQuery}`;
+        wsControl = new WebSocket(wsControlUrl);
+        wsControl.binaryType = "arraybuffer";
+        startWsControl(
+            wsControl,
+            term,
+            fitAddon,
+            webClientId,
+            userConfig,
+            isReadOnly,
+            () => clipper,
+            controlSend
+        );
+    }
 
-    wsControl = new WebSocket(
-        `${wsBaseUrl}/ws/control?web_client_id=${encodeURIComponent(ownWebClientId)}`
-    );
-    startWsControl(wsControl, term, fitAddon, ownWebClientId, userConfig);
     window.__zjSendControl = function (payload) {
-        if (wsControl && wsControl.readyState === WebSocket.OPEN) {
-            wsControl.send(
-                JSON.stringify({
-                    web_client_id: ownWebClientId,
-                    payload,
-                })
-            );
+        const controlClientId = ownWebClientId || webClientId;
+        if (!controlClientId || !payload) {
+            return;
         }
+        if (isRelayWatcher) {
+            return;
+        }
+        if (isReadOnly && !READ_ONLY_ALLOWED_CONTROL.has(payload.type)) {
+            return;
+        }
+        controlSend({ web_client_id: controlClientId, payload });
     };
+
+    wsTerminal = new WebSocket(wsTerminalUrl);
+    // With E2E on, the server emits ciphertext as binary frames; default
+    // Blob type would make decryption awkward. With no E2E, binary frames
+    // are never produced, so setting this is safe either way.
+    wsTerminal.binaryType = "arraybuffer";
 
     wsTerminal.onopen = function () {
         markConnectionEstablished();
     };
 
-    wsTerminal.onmessage = function (event) {
+    wsTerminal.onmessage = async function (event) {
         let data = event.data;
+        // Under r/o, keep the raw plaintext bytes separately so they can
+        // feed the clipper directly (avoids a UTF-8 round-trip).
+        let roPlaintext = null;
+
+        // Phase 3 client-commitment rule: under E2E, the first STDIN
+        // byte must never be transmitted before we have successfully
+        // decrypted at least one server frame. `ownWebClientId` gates
+        // `sendAnsiKey`, so leave it empty until a clean decrypt.
+        if (relay) {
+            if (!(data instanceof ArrayBuffer)) {
+                console.error(
+                    "received plaintext frame under E2E; refusing to activate STDIN"
+                );
+                return;
+            }
+            try {
+                const { seq, plaintext } = await decryptSeq(
+                    relay.terminalS2v,
+                    FRAME_TYPE_TERMINAL,
+                    DIRECTION_SHARER_TO_VIEWER,
+                    data
+                );
+                if (!terminalInWindow(seq)) {
+                    return;
+                }
+                if (useClipper) {
+                    roPlaintext = new Uint8Array(plaintext);
+                }
+                data = textDecoder.decode(plaintext);
+            } catch (err) {
+                console.error("e2e decrypt failed:", err);
+                return;
+            }
+        } else if (e2e) {
+            if (!(data instanceof ArrayBuffer)) {
+                // Under E2E, any Text frame from the server is a
+                // protocol violation: the server always emits Binary
+                // ciphertext. Refuse to activate STDIN.
+                console.error(
+                    "received plaintext frame under E2E; refusing to activate STDIN"
+                );
+                return;
+            }
+            try {
+                const plaintext = await decrypt(e2e.key, data);
+                if (useClipper) {
+                    roPlaintext = new Uint8Array(plaintext);
+                }
+                data = textDecoder.decode(plaintext);
+            } catch (err) {
+                console.error("e2e decrypt failed:", err);
+                return;
+            }
+        } else if (useClipper) {
+            if (data instanceof ArrayBuffer) {
+                roPlaintext = new Uint8Array(data);
+            } else if (typeof data === "string") {
+                roPlaintext = textEncoder.encode(data);
+            }
+        }
+
+        // Activate STDIN and the control WS only after the first frame
+        // has arrived (and, under E2E, decrypted cleanly). A decrypt
+        // failure or protocol violation above returned early without
+        // setting `ownWebClientId`, so a second chance is available
+        // when the next frame arrives.
+        if (ownWebClientId == "") {
+            ownWebClientId = webClientId;
+        }
+
+        if (useClipper && roPlaintext) {
+            // Route the raw server-serialized ANSI stream through the
+            // clipper. xterm gets a freshly re-emitted stream sized to
+            // the viewer's viewport — no network traffic on local
+            // resize (see `setupResizeHandler`) and no passthrough of
+            // title/cursor sequences since the clipper normalises them.
+            if (!clipperReady) {
+                pendingFrames.push(roPlaintext);
+                return;
+            }
+            clipper.apply(roPlaintext);
+            term.write(clipper.emit(term.rows, term.cols));
+            return;
+        }
 
         if (typeof data === "string") {
             // Handle ANSI title change sequences
@@ -3191,19 +3254,72 @@ function initWebSockets(boot, term, fitAddon) {
         }
     };
 
-    const sendAnsiKey = (ansiKey) => {
-        let payload = ansiKey;
-        if (typeof window.__zjMobileMergeKey === "function") {
-            payload = window.__zjMobileMergeKey(payload);
+    // Update sendAnsiKey to use the actual WebSocket.
+    // With E2E on, encrypt every outbound payload. xterm emits strings
+    // via term.onData and Uint8Arrays via term.onBinary (see input.js);
+    // we handle both.
+    const originalSendAnsiKey = sendAnsiKey;
+    sendAnsiKey = async (rawAnsiKey) => {
+        if (ownWebClientId === "") {
+            return;
         }
-        wsTerminal.send(payload);
+        if (isReadOnly) {
+            // Relay drops r/o input at its side; belt-and-braces — never
+            // transmit anything from this viewer.
+            return;
+        }
+        let ansiKey = rawAnsiKey;
+        if (typeof window.__zjMobileMergeKey === "function") {
+            ansiKey = window.__zjMobileMergeKey(ansiKey);
+        }
+        if (relay || e2e) {
+            let bytes;
+            if (typeof ansiKey === "string") {
+                bytes = new TextEncoder().encode(ansiKey);
+            } else if (ansiKey instanceof Uint8Array) {
+                bytes = ansiKey;
+            } else if (ansiKey instanceof ArrayBuffer) {
+                bytes = new Uint8Array(ansiKey);
+            } else {
+                console.error("sendAnsiKey: unsupported payload type", ansiKey);
+                return;
+            }
+            if (relay) {
+                terminalSendChain = terminalSendChain.then(async () => {
+                    try {
+                        const ct = await encryptSeq(
+                            relay.terminalV2s,
+                            terminalOutSeq,
+                            FRAME_TYPE_TERMINAL,
+                            DIRECTION_VIEWER_TO_SHARER,
+                            bytes
+                        );
+                        terminalOutSeq += 1;
+                        wsTerminal.send(ct);
+                    } catch (err) {
+                        console.error("e2e encrypt failed:", err);
+                    }
+                });
+                return;
+            }
+            try {
+                const ct = await encrypt(e2e.key, bytes);
+                wsTerminal.send(ct);
+            } catch (err) {
+                console.error("e2e encrypt failed:", err);
+            }
+            return;
+        }
+        wsTerminal.send(ansiKey);
     };
 
     setupResizeHandler(
         term,
         fitAddon,
-        () => wsControl,
-        () => ownWebClientId
+        controlSend,
+        () => ownWebClientId,
+        isReadOnly,
+        () => clipper
     );
 
     return {
@@ -3222,10 +3338,93 @@ function initWebSockets(boot, term, fitAddon) {
     };
 }
 
-function startWsControl(wsControl, term, fitAddon, ownWebClientId, userConfig) {
+function sendInitialControl(controlSend, controlClientId, term, fitAddon, isReadOnly) {
+    controlSend({
+        web_client_id: controlClientId,
+        payload: { type: "ClientReady" },
+    });
+    if (isReadOnly) {
+        return;
+    }
+    const fitDimensions = fitAddon.proposeDimensions();
+    if (!fitDimensions) {
+        return;
+    }
+    const { rows, cols } = fitDimensions;
+    sendSizeUpdate(controlSend, controlClientId, term, rows, cols);
+}
+
+function adoptControlChannel(
+    controlChannel,
+    term,
+    fitAddon,
+    controlClientId,
+    userConfig,
+    isReadOnly,
+    getClipper,
+    controlSend
+) {
+    sendInitialControl(controlSend, controlClientId, term, fitAddon, isReadOnly);
+    controlChannel.onFrame((msg) =>
+        handleControlMessage(msg, {
+            term,
+            fitAddon,
+            controlClientId,
+            userConfig,
+            isReadOnly,
+            getClipper,
+            controlSend,
+        })
+    );
+}
+
+function startWsControl(
+    wsControl,
+    term,
+    fitAddon,
+    controlClientId,
+    userConfig,
+    isReadOnly,
+    getClipper,
+    controlSend
+) {
+    wsControl.onopen = function (event) {
+        sendInitialControl(controlSend, controlClientId, term, fitAddon, isReadOnly);
+    };
+
     wsControl.onmessage = function (event) {
         const msg = JSON.parse(event.data);
-        if (msg.type === "SetConfig") {
+        handleControlMessage(msg, {
+            term,
+            fitAddon,
+            controlClientId,
+            userConfig,
+            isReadOnly,
+            getClipper,
+            controlSend,
+        });
+    };
+
+    wsControl.onclose = function (event) {
+        if (event.code === 4001) {
+            handleDisconnected();
+        } else {
+            handleReconnection();
+        }
+    };
+}
+
+function handleControlMessage(msg, ctx) {
+    const {
+        term,
+        fitAddon,
+        controlClientId,
+        userConfig,
+        isReadOnly,
+        getClipper,
+        controlSend,
+    } = ctx;
+    if (msg.type === "SetConfig") {
             const options = terminalConfigOptions(msg);
             for (const key of Object.keys(options)) {
                 term.options[key] = options[key];
@@ -3240,26 +3439,37 @@ function startWsControl(wsControl, term, fitAddon, ownWebClientId, userConfig) {
                 window.__zjSyncInactiveCursorStyle();
             }
             applyTerminalBackground(msg);
+
+            if (isReadOnly) {
+                const clipper = getClipper ? getClipper() : null;
+                if (clipper) {
+                    term.write(clipper.emit(term.rows, term.cols));
+                }
+            }
         } else if (msg.type === "QueryTerminalSize") {
             const sizing = getMobileRenderSizing();
             if (sizing.pinned) {
                 if (sizing.rows !== term.rows || sizing.cols !== term.cols) {
                     term.resize(sizing.cols, sizing.rows);
                 }
-                sendSizeUpdate(
-                    wsControl,
-                    ownWebClientId,
-                    term,
-                    sizing.rows,
-                    sizing.cols
-                );
+                if (!isReadOnly) {
+                    sendSizeUpdate(
+                        controlSend,
+                        controlClientId,
+                        term,
+                        sizing.rows,
+                        sizing.cols
+                    );
+                }
             } else {
                 const fitDimensions = fitAddon.proposeDimensions();
                 const { rows, cols } = fitDimensions;
                 if (rows !== term.rows || cols !== term.cols) {
                     term.resize(cols, rows);
                 }
-                sendSizeUpdate(wsControl, ownWebClientId, term, rows, cols);
+                if (!isReadOnly) {
+                    sendSizeUpdate(controlSend, controlClientId, term, rows, cols);
+                }
             }
         } else if (msg.type === "Log") {
             const { lines } = msg;
@@ -3273,11 +3483,15 @@ function startWsControl(wsControl, term, fitAddon, ownWebClientId, userConfig) {
             }
         } else if (msg.type === "SwitchedSession") {
             const { new_session_name } = msg;
-            const baseUrl = getBaseUrl();
-            const target = `${baseUrl}/${encodeURIComponent(new_session_name)}`;
-            if (!isCurrentLocation(target)) {
-                history.pushState(null, "", target);
+            if (isRelayMode()) {
                 document.title = new_session_name;
+            } else {
+                const baseUrl = getBaseUrl();
+                const target = `${baseUrl}/${encodeURIComponent(new_session_name)}`;
+                if (!isCurrentLocation(target)) {
+                    history.pushState(null, "", target);
+                    document.title = new_session_name;
+                }
             }
         } else if (msg.type === "SetSoftKeyboard") {
             const { on } = msg;
@@ -3290,23 +3504,25 @@ function startWsControl(wsControl, term, fitAddon, ownWebClientId, userConfig) {
                     window.__zjMobileUi.setData(payload);
                 }
             }
+        } else if (msg.type === "SessionSizeChanged") {
+            // Relay-forwarded sharer-side resize. Update the clipper's
+            // session grid and re-emit at the viewer's viewport so the
+            // terminal paints the new layout in one cycle.
+            const clipper = getClipper ? getClipper() : null;
+            if (clipper) {
+                clipper.resizeSession(Number(msg.rows) || 0, Number(msg.cols) || 0);
+                term.write(clipper.emit(term.rows, term.cols));
+            }
         }
-    };
-
-    wsControl.onclose = function (event) {
-        if (event.code === 4001) {
-            handleDisconnected();
-        } else {
-            handleReconnection();
-        }
-    };
 }
 
 function setupResizeHandler(
     term,
     fitAddon,
-    getWsControl,
-    getOwnWebClientId
+    controlSend,
+    getOwnWebClientId,
+    isReadOnly,
+    getClipper
 ) {
     let resizeScheduled = false;
     let pendingResizeSignal = false;
@@ -3349,10 +3565,19 @@ function setupResizeHandler(
             return;
         }
 
-        const wsControl = getWsControl();
         term.resize(cols, rows);
 
-        sendSizeUpdate(wsControl, ownWebClientId, term, rows, cols);
+        if (isReadOnly) {
+            // Pure client-side re-clip. The sharer's session viewport
+            // has not changed; only our cut of it has.
+            const clipper = getClipper ? getClipper() : null;
+            if (clipper) {
+                term.write(clipper.emit(rows, cols));
+            }
+            return;
+        }
+
+        sendSizeUpdate(controlSend, ownWebClientId, term, rows, cols);
     };
 
     const handleViewportChange = () => {
@@ -3383,10 +3608,18 @@ function setupResizeHandler(
     }
     addEventListener("zellij:rendering-resize", scheduleResize);
 
-    setupSoftKeyboardVisibilityTracker(getWsControl, getOwnWebClientId);
+    setupSoftKeyboardVisibilityTracker(
+        controlSend,
+        getOwnWebClientId,
+        isReadOnly && isRelayMode()
+    );
 }
 
-function setupSoftKeyboardVisibilityTracker(getWsControl, getOwnWebClientId) {
+function setupSoftKeyboardVisibilityTracker(
+    controlSend,
+    getOwnWebClientId,
+    isRelayWatcher
+) {
     if (!window.visualViewport) {
         return;
     }
@@ -3424,57 +3657,64 @@ function setupSoftKeyboardVisibilityTracker(getWsControl, getOwnWebClientId) {
             }
         }
 
-        const wsControl = getWsControl();
         const ownWebClientId = getOwnWebClientId();
-        if (!wsControl || ownWebClientId === "") {
+        if (ownWebClientId === "" || isRelayWatcher) {
             return;
         }
-        wsControl.send(
-            JSON.stringify({
-                web_client_id: ownWebClientId,
-                payload: {
-                    type: "SoftKeyboardVisibilityChanged",
-                    visible: kbdVisible,
-                },
-            })
-        );
+        controlSend({
+            web_client_id: ownWebClientId,
+            payload: {
+                type: "SoftKeyboardVisibilityChanged",
+                visible: kbdVisible,
+            },
+        });
     };
 
     window.visualViewport.addEventListener("resize", onResize);
 }
 
-document.addEventListener("DOMContentLoaded", async (event) => {
-    initConnectionHandlers();
+async function start({ session, controlChannel, bufferedControl }) {
+    const {
+        webClientId,
+        e2e,
+        isReadOnly,
+        sessionRows,
+        sessionCols,
+        handshake,
+        config,
+    } = session;
 
-    const sessionFromPath = location.pathname.split("/").pop();
+    const { term, fitAddon } = initTerminal(config);
+    settleFontSize(term, fitAddon, config);
 
-    // A session name in the path is an explicit request for that session; only the bare root,
-    // which would otherwise boot a welcome session, is replaced by the session menu.
-    let welcome = true;
-    if (!sessionFromPath && shouldUseStandaloneMenu()) {
-        document.title = "Zellij";
-        await showStandaloneSessionMenu({ fetchSessions: fetchSessionList });
-        welcome = false;
-    }
-
-    const boot = await fetchSession(sessionFromPath, { welcome });
-
-    if (!location.pathname.endsWith(`/${boot.session_name}`)) {
-        history.replaceState(null, "", boot.session_name);
-    }
-
-    const { term, fitAddon } = initTerminal(boot.config);
-    settleFontSize(term, fitAddon, boot.config);
+    const sessionName = isRelayMode()
+        ? location.pathname.split("/").pop()
+        : session.sessionName || location.pathname.split("/").pop();
 
     let websockets = null;
     initMobileUi({
         term,
         fitAddon,
+        isReadOnly: !!isReadOnly,
         getSendAnsiKey: () => (websockets ? websockets.sendAnsiKey : () => {}),
     });
 
-    document.title = boot.session_name;
-    websockets = initWebSockets(boot, term, fitAddon);
+    document.title = sessionName;
+    websockets = initWebSockets(
+        webClientId,
+        sessionName,
+        term,
+        fitAddon,
+        () => {},
+        e2e,
+        { isReadOnly, sessionRows, sessionCols, config },
+        handshake,
+        controlChannel,
+        bufferedControl
+    );
 
     setupInputHandlers(term, fitAddon, websockets.sendAnsiKey);
-});
+
+    return websockets;
+}
+export { start, shouldUseStandaloneMenu, showStandaloneSessionMenu };

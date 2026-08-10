@@ -13,7 +13,7 @@ futures-util = "0.3"
 log = { workspace = true }
 prost = { workspace = true }
 clap = { version = "4", features = ["derive"] }
-directories = { version = "5.0", default-features = false }
+directories = { version = "6.0", default-features = false }
 rand = "0.8"
 rusqlite = { version = "0.30", default-features = false, features = ["bundled"] }
 serde = { workspace = true }
@@ -28,7 +28,7 @@ zellij-relay-protocol = { workspace = true }
 
 [dev-dependencies]
 serial_test = "3.0"
-tokio-tungstenite = "0.20"
+tokio-tungstenite = "0.28"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "cookies"] }
 
 [[bin]]

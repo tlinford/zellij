@@ -100,7 +100,7 @@ async function getClientIdRelay(token, expectedE2e, opts) {
     }
 
     const sas = await deriveSas(viewerMsg, sharerMsg);
-    let sessRes = await fetch(`${httpBase}/session`, {
+    let sessRes = await fetch(`${httpBase}/session${sessionQuery(opts)}`, {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
@@ -141,14 +141,28 @@ async function getClientIdRelay(token, expectedE2e, opts) {
         webClientId: body.web_client_id,
         e2e: { relay },
         isReadOnly: body.is_read_only === true,
-        sessionRows: 0,
-        sessionCols: 0,
+        sessionName: typeof body.session_name === "string" ? body.session_name : "",
+        config: body.config || null,
+        sessionRows: Number(body.session_rows) || 0,
+        sessionCols: Number(body.session_cols) || 0,
         handshake,
         sas,
     };
 }
 
-export async function deviceReconnectSession(deviceRecord) {
+function sessionQuery(opts) {
+    const params = new URLSearchParams();
+    if (opts && opts.session) {
+        params.set("session", opts.session);
+    }
+    if (opts && opts.welcome === false) {
+        params.set("welcome", "false");
+    }
+    const query = params.toString();
+    return query ? `?${query}` : "";
+}
+
+export async function deviceReconnectSession(deviceRecord, opts) {
     if (getAuthMode() !== "relay") {
         return null;
     }
@@ -156,6 +170,8 @@ export async function deviceReconnectSession(deviceRecord) {
     return getClientIdRelay(deviceRecord.deviceSecret, expectedE2e, {
         linkId: deviceRecord.deviceId,
         silent: true,
+        session: opts && opts.session,
+        welcome: opts && opts.welcome,
     });
 }
 
@@ -251,76 +267,88 @@ async function saveCredential(token) {
     }
 }
 
-/**
- * Get client ID from server after authentication
- * @param {string} token - Authentication token
- * @param {boolean} rememberMe - Local-mode Remember-me preference; ignored in relay mode
- * @param {boolean} hasAuthenticationCookie - Whether auth cookie exists
- * @returns {Promise<{webClientId: string, e2e: ?{key: CryptoKey}} | null>} null on failure
- */
-export async function getClientId(token, rememberMe, hasAuthenticationCookie, expectedE2e) {
+let lastEnteredToken = null;
+
+async function login(token, rememberMe) {
     const baseUrl = getBaseUrl();
-
-    // Relay mode uses a SPAKE2 handshake (the secret never reaches the relay).
-    // It is inherently a fresh two-round-trip exchange every time, so the
-    // cookie-resume shortcut does not apply.
-    if (getAuthMode() === "relay") {
-        return getClientIdRelay(token, expectedE2e);
-    }
-
-    if (!hasAuthenticationCookie) {
-        // In relay mode `remember_me` has no server-side effect (no
-        // persistent cookie path) and the field is not part of the relay
-        // login contract, so it is omitted entirely. In local mode the
-        // flag is forwarded so the standalone web-client can issue a
-        // persistent cookie when requested.
-        const loginBody = getAuthMode() === "local"
+    const loginBody =
+        getAuthMode() === "local"
             ? { auth_token: token, remember_me: !!rememberMe }
             : { auth_token: token };
-        let login_res = await fetch(`${baseUrl}/command/login`, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-            },
-            body: JSON.stringify(loginBody),
-            credentials: "include",
-        });
-
-        if (login_res.status === 401) {
-            await showErrorModal(
-                "Error",
-                "Unauthorized or revoked login token."
-            );
-            return null;
-        } else if (!login_res.ok) {
-            await showErrorModal(
-                "Error",
-                `Error ${login_res.status} connecting to server.`
-            );
-            return null;
-        }
-    }
-
-    let data = await fetch(`${baseUrl}/session`, {
+    const login_res = await fetch(`${baseUrl}/command/login`, {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
         },
-        body: JSON.stringify({}),
+        body: JSON.stringify(loginBody),
+        credentials: "include",
     });
 
-    if (data.status === 401) {
+    if (login_res.status === 401) {
         await showErrorModal("Error", "Unauthorized or revoked login token.");
-        return null;
-    } else if (!data.ok) {
+        return false;
+    } else if (!login_res.ok) {
         await showErrorModal(
             "Error",
-            `Error ${data.status} connecting to server.`
+            `Error ${login_res.status} connecting to server.`
         );
-        return null;
+        return false;
     }
+    return true;
+}
 
-    let body = await data.json();
+export async function authorizedFetch(url, options = {}) {
+    while (true) {
+        const response = await fetch(url, {
+            credentials: "include",
+            ...options,
+        });
+
+        if (response.ok) {
+            return response;
+        }
+
+        if (response.status !== 401) {
+            await showErrorModal(
+                "Error",
+                `Error ${response.status} connecting to server.`
+            );
+        }
+
+        const { token, remember } = await waitForSecurityToken();
+        lastEnteredToken = token;
+        if (await login(token, remember)) {
+            await saveCredential(token);
+        }
+    }
+}
+
+export async function fetchSession(sessionFromPath, options = {}) {
+    const baseUrl = getBaseUrl();
+    const query = sessionQuery({
+        session: sessionFromPath,
+        welcome: options.welcome,
+    });
+
+    const response = await authorizedFetch(`${baseUrl}/session${query}`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+        },
+    });
+    return await response.json();
+}
+
+export async function fetchSessionList() {
+    const baseUrl = getBaseUrl();
+    const response = await authorizedFetch(`${baseUrl}/session-list`, {
+        method: "GET",
+    });
+    const payload = await response.json();
+    return payload.sessions || [];
+}
+
+async function finaliseLocalSession(body, expectedE2e) {
     const serverE2e = body.e2e_encrypted === true;
 
     // Cross-check: the server's claim must not be weaker than what the
@@ -345,7 +373,12 @@ export async function getClientId(token, rememberMe, hasAuthenticationCookie, ex
             );
             return null;
         }
-        const tokenHashHex = await sha256Hex(token);
+        if (!lastEnteredToken) {
+            const tokenResult = await waitForSecurityToken();
+            lastEnteredToken = tokenResult.token;
+            await saveCredential(lastEnteredToken);
+        }
+        const tokenHashHex = await sha256Hex(lastEnteredToken);
         const key = await deriveKey(tokenHashHex, body.tunnel_id);
         e2e = { key };
     }
@@ -354,24 +387,48 @@ export async function getClientId(token, rememberMe, hasAuthenticationCookie, ex
         webClientId: body.web_client_id,
         e2e,
         isReadOnly: body.is_read_only === true,
+        sessionName: typeof body.session_name === "string" ? body.session_name : "",
+        config: body.config || null,
         sessionRows: Number(body.session_rows) || 0,
         sessionCols: Number(body.session_cols) || 0,
     };
 }
 
 /**
- * Initialize authentication flow and return client ID
- * @returns {Promise<{webClientId: string, e2e: ?{key: CryptoKey}}>}
  */
-export async function initAuthentication() {
-    const expectedE2e = readExpectedE2e();
+export async function getClientId(
+    token,
+    rememberMe,
+    hasAuthenticationCookie,
+    expectedE2e,
+    opts
+) {
     if (getAuthMode() === "relay") {
-        return await initRelayAuthentication(expectedE2e);
+        return getClientIdRelay(token, expectedE2e, opts);
     }
-    return await initLocalAuthentication(expectedE2e);
+
+    if (!hasAuthenticationCookie) {
+        if (!(await login(token, rememberMe))) {
+            return null;
+        }
+        lastEnteredToken = token;
+    }
+
+    const body = await fetchSession(opts && opts.session, {
+        welcome: opts ? opts.welcome : undefined,
+    });
+    return finaliseLocalSession(body, expectedE2e);
 }
 
-async function initRelayAuthentication(expectedE2e) {
+export async function initAuthentication(opts) {
+    const expectedE2e = readExpectedE2e();
+    if (getAuthMode() === "relay") {
+        return await initRelayAuthentication(expectedE2e, opts);
+    }
+    return await initLocalAuthentication(expectedE2e, opts);
+}
+
+async function initRelayAuthentication(expectedE2e, opts) {
     const fragmentSecret = getRelayTarget().secret;
     if (!fragmentSecret) {
         await showErrorModal(
@@ -380,54 +437,29 @@ async function initRelayAuthentication(expectedE2e) {
         );
         throw new Error("relay share link has no fragment secret");
     }
-    const session = await getClientId(fragmentSecret, false, false, expectedE2e);
+    const session = await getClientId(fragmentSecret, false, false, expectedE2e, opts);
     if (!session) {
         throw new Error("relay authentication rejected");
     }
     return session;
 }
 
-async function initLocalAuthentication(expectedE2e) {
-    let token = null;
-    let remember = false;
-    let hasAuthenticationCookie = document.body.dataset.authenticated === "true";
-    // Gates the imperative `navigator.credentials.store` call so the
-    // password manager is only asked to save tokens that came from a
-    // real user gesture, not from a silent autofill.
-    let tokenFromUserEntry = false;
-
+async function initLocalAuthentication(expectedE2e, opts) {
+    const hasAuthenticationCookie = document.body.dataset.authenticated === "true";
     if (!hasAuthenticationCookie) {
         const tokenResult = await waitForSecurityToken();
-        token = tokenResult.token;
-        remember = tokenResult.remember;
-        tokenFromUserEntry = true;
-    }
-
-    let session;
-
-    while (!session) {
-        session = await getClientId(
-            token,
-            remember,
-            hasAuthenticationCookie,
-            expectedE2e,
-        );
-        if (!session) {
-            // Login rejected (revoked / wrong token) — drop any cookie
-            // assumption and prompt the user manually. The modal's
-            // form-submit then lets the password manager offer to
-            // update the saved credential.
-            hasAuthenticationCookie = false;
-            const tokenResult = await waitForSecurityToken();
-            token = tokenResult.token;
-            remember = tokenResult.remember;
-            tokenFromUserEntry = true;
+        lastEnteredToken = tokenResult.token;
+        if (await login(tokenResult.token, tokenResult.remember)) {
+            await saveCredential(tokenResult.token);
         }
     }
 
-    if (token && tokenFromUserEntry) {
-        await saveCredential(token);
+    const body = await fetchSession(opts && opts.session, {
+        welcome: opts ? opts.welcome : undefined,
+    });
+    const session = await finaliseLocalSession(body, expectedE2e);
+    if (!session) {
+        throw new Error("local authentication refused");
     }
-
     return session;
 }

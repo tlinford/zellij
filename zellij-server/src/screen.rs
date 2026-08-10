@@ -3970,17 +3970,11 @@ impl Screen {
             output.collect_ansi_pane_contents =
                 self.pane_render_subscribers.values().any(|s| s.ansi);
 
-            // Tabs that participate in mobile mode (the mobile tab and the
-            // backgrounded pre-mobile tab a client returns to on exit) are
-            // exempt from the empty-tab reaper below: a pre-mobile tab whose
-            // panes are mirrored into the mobile plugin has no selectable tiled
-            // pane of its own, but closing it would tear down the session.
-            let mobile_related_tabs = self.mobile_state.mobile_related_tab_ids();
             for (tab_index, tab) in &mut self.tabs {
                 if tab.has_selectable_tiled_panes() {
                     // Pass None for normal client rendering
                     tab.render(&mut output, None).context(err_context)?;
-                } else if !tab.is_pending() && !mobile_related_tabs.contains(tab_index) {
+                } else if !tab.is_pending() {
                     tabs_to_close.push(*tab_index);
                 }
             }

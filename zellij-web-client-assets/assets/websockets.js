@@ -1,7 +1,12 @@
 import { handleReconnection, handleDisconnected, markConnectionEstablished } from "/assets/connection.js";
-import { getBaseUrl, getWsApiBase, isRelayMode } from "/assets/utils.js";
+import {
+    getBaseUrl,
+    getWsApiBase,
+    isRelayMode,
+    isCurrentLocation,
+} from "/assets/utils.js";
 import { setSoftKeyboard } from "./input.js";
-import { applyFontSize } from "./terminal.js";
+import { applyTerminalBackground, terminalConfigOptions } from "./terminal.js";
 import {
     encrypt,
     decrypt,
@@ -14,8 +19,9 @@ import {
 } from "/assets/crypto.js";
 import { createClipper } from "./clip.js";
 
-const NATURAL_MIN_TOTAL_ROWS = 25;
-const MOBILE_LEGIBLE_FLOOR_PX = 16;
+let lastSentCellDimensions = null;
+
+const READ_ONLY_ALLOWED_CONTROL = new Set(["SoftKeyboardVisibilityChanged"]);
 
 function getCellPixelDimensions(term) {
     try {
@@ -39,20 +45,20 @@ function getCellPixelDimensions(term) {
     return null;
 }
 
-function sendSizeUpdate(controlSend, ownWebClientId, term, rows, cols, cause) {
+function getMobileRenderSizing() {
+    return window.__zjMobileUi && window.__zjMobileUi.getRenderSizing
+        ? window.__zjMobileUi.getRenderSizing()
+        : { pinned: false };
+}
+
+function sendSizeUpdate(controlSend, ownWebClientId, term, rows, cols) {
     if (!controlSend || !ownWebClientId) {
         return;
     }
-    const resizeType =
-        cause === "RenderingPreference"
-            ? "TerminalResizeRendering"
-            : cause === "Settled"
-            ? "TerminalSizeSettled"
-            : "TerminalResize";
     controlSend({
         web_client_id: ownWebClientId,
         payload: {
-            type: resizeType,
+            type: "TerminalResize",
             rows,
             cols,
         },
@@ -61,12 +67,22 @@ function sendSizeUpdate(controlSend, ownWebClientId, term, rows, cols, cause) {
     if (!cell) {
         return;
     }
+    const cellWidth = Math.round(cell.width);
+    const cellHeight = Math.round(cell.height);
+    if (
+        lastSentCellDimensions &&
+        lastSentCellDimensions.width === cellWidth &&
+        lastSentCellDimensions.height === cellHeight
+    ) {
+        return;
+    }
+    lastSentCellDimensions = { width: cellWidth, height: cellHeight };
     controlSend({
         web_client_id: ownWebClientId,
         payload: {
             type: "TerminalMetrics",
-            cell_pixel_width: Math.round(cell.width),
-            cell_pixel_height: Math.round(cell.height),
+            cell_pixel_width: cellWidth,
+            cell_pixel_height: cellHeight,
             text_area_pixel_width: Math.round(cols * cell.width),
             text_area_pixel_height: Math.round(rows * cell.height),
         },
@@ -81,9 +97,7 @@ function sendSizeUpdate(controlSend, ownWebClientId, term, rows, cols, cause) {
  * @param {FitAddon} fitAddon - Terminal fit addon
  * @param {function} sendAnsiKey - Function to send ANSI key sequences
  * @param {?{key: CryptoKey}} e2e - E2E encryption state, or null/undefined for plain
- * @param {?{isReadOnly: boolean, sessionRows: number, sessionCols: number}} roViewer
  *   Populated for relay r/o viewers. Triggers client-side clipping + resize
- *   suppression; ignored when `isReadOnly` is false.
  * @returns {object} Object containing WebSocket instances and cleanup function
  */
 export function initWebSockets(
@@ -104,7 +118,16 @@ export function initWebSockets(
     let ownWebClientId = "";
     let wsTerminal;
     let wsControl;
+    const bootConfig = (roViewer && roViewer.config) || null;
     const userConfig = { blink: false, style: false };
+    if (bootConfig) {
+        if (typeof bootConfig.cursor_blink !== "undefined") {
+            userConfig.blink = true;
+        }
+        if (typeof bootConfig.cursor_style !== "undefined") {
+            userConfig.style = true;
+        }
+    }
     const textDecoder = new TextDecoder();
     const textEncoder = new TextEncoder();
 
@@ -131,6 +154,7 @@ export function initWebSockets(
           };
 
     const isReadOnly = !!(roViewer && roViewer.isReadOnly);
+    const isRelayWatcher = isReadOnly && isRelayMode();
     // Clipping is only used for the legacy shared-stream fan-out, which is
     // signalled by a non-zero session size. Under the E2E per-viewer model
     // each read-only viewer gets its own correctly-sized render stream, so
@@ -163,6 +187,14 @@ export function initWebSockets(
             });
     }
 
+    const fitDimensions = fitAddon.proposeDimensions() || {
+        rows: term.rows,
+        cols: term.cols,
+    };
+    if (fitDimensions.rows !== term.rows || fitDimensions.cols !== term.cols) {
+        term.resize(fitDimensions.cols, fitDimensions.rows);
+    }
+
     if (controlChannel) {
         adoptControlChannel(
             controlChannel,
@@ -178,12 +210,58 @@ export function initWebSockets(
 
     const wsBaseUrl = getWsApiBase();
     const url =
-        sessionName === ""
+        !sessionName || sessionName === ""
             ? `${wsBaseUrl}/ws/terminal`
             : `${wsBaseUrl}/ws/terminal/${sessionName}`;
 
-    const queryString = `?web_client_id=${encodeURIComponent(webClientId)}${handshakeQuery}`;
+    let queryString = `?web_client_id=${encodeURIComponent(webClientId)}&rows=${term.rows}&cols=${term.cols}`;
+    const bootCell = getCellPixelDimensions(term);
+    if (bootCell) {
+        const cellWidth = Math.round(bootCell.width);
+        const cellHeight = Math.round(bootCell.height);
+        queryString += `&cell_width=${cellWidth}&cell_height=${cellHeight}`;
+        lastSentCellDimensions = { width: cellWidth, height: cellHeight };
+    }
+    queryString += handshakeQuery;
     const wsTerminalUrl = `${url}${queryString}`;
+
+    // The control socket is opened up front so the server never has to hold
+    // back state it produces before the browser is listening. It carries no
+    // STDIN; keystroke transmission stays gated on the first decrypted frame
+    // via `ownWebClientId` below. In relay mode the channel already exists
+    // (opened for admission before the application bundle loaded) and is
+    // adopted above instead.
+    if (!controlChannel) {
+        const wsControlUrl = `${wsBaseUrl}/ws/control?web_client_id=${encodeURIComponent(
+            webClientId
+        )}${handshakeQuery}`;
+        wsControl = new WebSocket(wsControlUrl);
+        wsControl.binaryType = "arraybuffer";
+        startWsControl(
+            wsControl,
+            term,
+            fitAddon,
+            webClientId,
+            userConfig,
+            isReadOnly,
+            () => clipper,
+            controlSend
+        );
+    }
+
+    window.__zjSendControl = function (payload) {
+        const controlClientId = ownWebClientId || webClientId;
+        if (!controlClientId || !payload) {
+            return;
+        }
+        if (isRelayWatcher) {
+            return;
+        }
+        if (isReadOnly && !READ_ONLY_ALLOWED_CONTROL.has(payload.type)) {
+            return;
+        }
+        controlSend({ web_client_id: controlClientId, payload });
+    };
 
     wsTerminal = new WebSocket(wsTerminalUrl);
     // With E2E on, the server emits ciphertext as binary frames; default
@@ -265,23 +343,6 @@ export function initWebSockets(
         // when the next frame arrives.
         if (ownWebClientId == "") {
             ownWebClientId = webClientId;
-            if (!controlChannel) {
-                const wsControlUrl = `${wsBaseUrl}/ws/control${
-                    handshake ? `?handshake=${encodeURIComponent(handshake)}` : ""
-                }`;
-                wsControl = new WebSocket(wsControlUrl);
-                wsControl.binaryType = "arraybuffer";
-                startWsControl(
-                    wsControl,
-                    term,
-                    fitAddon,
-                    ownWebClientId,
-                    userConfig,
-                    isReadOnly,
-                    () => clipper,
-                    controlSend
-                );
-            }
         }
 
         if (useClipper && roPlaintext) {
@@ -356,7 +417,7 @@ export function initWebSockets(
     // via term.onData and Uint8Arrays via term.onBinary (see input.js);
     // we handle both.
     const originalSendAnsiKey = sendAnsiKey;
-    sendAnsiKey = async (ansiKey) => {
+    sendAnsiKey = async (rawAnsiKey) => {
         if (ownWebClientId === "") {
             return;
         }
@@ -364,6 +425,10 @@ export function initWebSockets(
             // Relay drops r/o input at its side; belt-and-braces — never
             // transmit anything from this viewer.
             return;
+        }
+        let ansiKey = rawAnsiKey;
+        if (typeof window.__zjMobileMergeKey === "function") {
+            ansiKey = window.__zjMobileMergeKey(ansiKey);
         }
         if (relay || e2e) {
             let bytes;
@@ -518,91 +583,51 @@ function handleControlMessage(msg, ctx) {
         controlSend,
     } = ctx;
     if (msg.type === "SetConfig") {
-            const {
-                font,
-                theme,
-                cursor_blink,
-                mac_option_is_meta,
-                cursor_style,
-                cursor_inactive_style,
-                font_size,
-            } = msg;
-            term.options.fontFamily = font;
-            term.options.theme = theme;
-            if (cursor_blink !== "undefined") {
-                term.options.cursorBlink = cursor_blink;
+            const options = terminalConfigOptions(msg);
+            for (const key of Object.keys(options)) {
+                term.options[key] = options[key];
+            }
+            if (typeof msg.cursor_blink !== "undefined") {
                 userConfig.blink = true;
             }
-            if (mac_option_is_meta !== "undefined") {
-                term.options.macOptionIsMeta = mac_option_is_meta;
-            }
-            if (cursor_style !== "undefined") {
-                term.options.cursorStyle = cursor_style;
+            if (typeof msg.cursor_style !== "undefined") {
                 userConfig.style = true;
-            }
-            if (cursor_inactive_style !== "undefined") {
-                term.options.cursorInactiveStyle = cursor_inactive_style;
             }
             if (typeof window.__zjSyncInactiveCursorStyle === "function") {
                 window.__zjSyncInactiveCursorStyle();
             }
-            const isMobileViewport =
-                (window.matchMedia &&
-                    window.matchMedia("(pointer: coarse)").matches &&
-                    window.innerWidth < 600) ||
-                /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
-            const hasExplicitFontSize =
-                typeof font_size === "number" && font_size > 0;
-            const baseFontPx = hasExplicitFontSize
-                ? font_size
-                : isMobileViewport
-                ? 24
-                : 12;
-            applyFontSize(term, fitAddon, baseFontPx);
-            const needsMobileDownscale =
-                !hasExplicitFontSize &&
-                isMobileViewport &&
-                term.rows < NATURAL_MIN_TOTAL_ROWS;
-            if (needsMobileDownscale) {
-                const downscaledPx = Math.max(
-                    Math.floor(
-                        (baseFontPx * term.rows) / NATURAL_MIN_TOTAL_ROWS
-                    ),
-                    MOBILE_LEGIBLE_FLOOR_PX
-                );
-                if (downscaledPx < baseFontPx) {
-                    applyFontSize(term, fitAddon, downscaledPx);
-                }
-            }
-            const body = document.querySelector("body");
-            body.style.background = theme.background || "black";
-
-            const terminal = document.getElementById("terminal");
-            terminal.style.background = theme.background;
+            applyTerminalBackground(msg);
 
             if (isReadOnly) {
                 const clipper = getClipper ? getClipper() : null;
                 if (clipper) {
                     term.write(clipper.emit(term.rows, term.cols));
                 }
-            } else {
-                sendSizeUpdate(
-                    controlSend,
-                    controlClientId,
-                    term,
-                    term.rows,
-                    term.cols,
-                    "Settled"
-                );
             }
         } else if (msg.type === "QueryTerminalSize") {
-            const fitDimensions = fitAddon.proposeDimensions();
-            const { rows, cols } = fitDimensions;
-            if (rows !== term.rows || cols !== term.cols) {
-                term.resize(cols, rows);
-            }
-            if (!isReadOnly) {
-                sendSizeUpdate(controlSend, controlClientId, term, rows, cols);
+            const sizing = getMobileRenderSizing();
+            if (sizing.pinned) {
+                if (sizing.rows !== term.rows || sizing.cols !== term.cols) {
+                    term.resize(sizing.cols, sizing.rows);
+                }
+                if (!isReadOnly) {
+                    sendSizeUpdate(
+                        controlSend,
+                        controlClientId,
+                        term,
+                        sizing.rows,
+                        sizing.cols
+                    );
+                }
+            } else {
+                const fitDimensions = fitAddon.proposeDimensions();
+                const { rows, cols } = fitDimensions;
+                if (rows !== term.rows || cols !== term.cols) {
+                    term.resize(cols, rows);
+                }
+                if (!isReadOnly) {
+                    sendSizeUpdate(controlSend, controlClientId, term, rows, cols);
+                }
             }
         } else if (msg.type === "Log") {
             const { lines } = msg;
@@ -620,11 +645,23 @@ function handleControlMessage(msg, ctx) {
                 document.title = new_session_name;
             } else {
                 const baseUrl = getBaseUrl();
-                window.location.href = `${baseUrl}/${encodeURIComponent(new_session_name)}`;
+                const target = `${baseUrl}/${encodeURIComponent(new_session_name)}`;
+                if (!isCurrentLocation(target)) {
+                    history.pushState(null, "", target);
+                    document.title = new_session_name;
+                }
             }
         } else if (msg.type === "SetSoftKeyboard") {
             const { on } = msg;
             setSoftKeyboard(term, !!on);
+        } else if (msg.type === "MobileState") {
+            const { payload } = msg;
+            if (payload) {
+                window.__zjLastMobileState = payload;
+                if (window.__zjMobileUi) {
+                    window.__zjMobileUi.setData(payload);
+                }
+            }
         } else if (msg.type === "SessionSizeChanged") {
             // Relay-forwarded sharer-side resize. Update the clipper's
             // session grid and re-emit at the viewer's viewport so the
@@ -646,29 +683,7 @@ export function setupResizeHandler(
     getClipper
 ) {
     let resizeScheduled = false;
-    let pendingViewportSignal = false;
-    let pendingRenderingSignal = false;
-    let settleTimer = null;
-    const SETTLE_DELAY_MS = 200;
-
-    const emitSettled = () => {
-        settleTimer = null;
-        if (isReadOnly) {
-            return;
-        }
-        const ownWebClientId = getOwnWebClientId();
-        if (ownWebClientId === "") {
-            return;
-        }
-        sendSizeUpdate(
-            controlSend,
-            ownWebClientId,
-            term,
-            term.rows,
-            term.cols,
-            "Settled"
-        );
-    };
+    let pendingResizeSignal = false;
 
     const updateViewportVars = () => {
         const root = document.documentElement;
@@ -679,9 +694,21 @@ export function setupResizeHandler(
         root.style.setProperty("--dynamic-vw", `${width}px`);
     };
 
-    const resizeTerminal = (cause) => {
+    const resizeTerminal = () => {
         const ownWebClientId = getOwnWebClientId();
         if (ownWebClientId === "") {
+            return;
+        }
+
+        const sizing = getMobileRenderSizing();
+
+        if (sizing.pinned) {
+            if (sizing.rows !== term.rows || sizing.cols !== term.cols) {
+                term.resize(sizing.cols, sizing.rows);
+            }
+            if (window.__zjMobilePan) {
+                window.__zjMobilePan.recompute();
+            }
             return;
         }
 
@@ -708,57 +735,49 @@ export function setupResizeHandler(
             return;
         }
 
-        sendSizeUpdate(controlSend, ownWebClientId, term, rows, cols, cause);
+        sendSizeUpdate(controlSend, ownWebClientId, term, rows, cols);
     };
 
-    const handleViewportChange = (cause) => {
+    const handleViewportChange = () => {
         updateViewportVars();
-        resizeTerminal(cause);
+        resizeTerminal();
     };
 
-    const scheduleResize = (cause) => {
-        if (cause === "RenderingPreference") {
-            pendingRenderingSignal = true;
-        } else {
-            pendingViewportSignal = true;
-            if (settleTimer) {
-                clearTimeout(settleTimer);
-            }
-            settleTimer = setTimeout(emitSettled, SETTLE_DELAY_MS);
-        }
+    const scheduleResize = () => {
+        pendingResizeSignal = true;
         if (resizeScheduled) {
             return;
         }
         resizeScheduled = true;
         requestAnimationFrame(() => {
-            const tickCause =
-                pendingRenderingSignal && !pendingViewportSignal
-                    ? "RenderingPreference"
-                    : "Viewport";
-            pendingViewportSignal = false;
-            pendingRenderingSignal = false;
             resizeScheduled = false;
-            handleViewportChange(tickCause);
+            if (!pendingResizeSignal) {
+                return;
+            }
+            pendingResizeSignal = false;
+            handleViewportChange();
         });
     };
 
-    const scheduleViewportResize = () => scheduleResize("Viewport");
-    const scheduleRenderingResize = () => scheduleResize("RenderingPreference");
-
     updateViewportVars();
-    addEventListener("resize", scheduleViewportResize);
+    addEventListener("resize", scheduleResize);
     if (window.visualViewport) {
-        window.visualViewport.addEventListener(
-            "resize",
-            scheduleViewportResize
-        );
+        window.visualViewport.addEventListener("resize", scheduleResize);
     }
-    addEventListener("zellij:rendering-resize", scheduleRenderingResize);
+    addEventListener("zellij:rendering-resize", scheduleResize);
 
-    setupSoftKeyboardVisibilityTracker(controlSend, getOwnWebClientId);
+    setupSoftKeyboardVisibilityTracker(
+        controlSend,
+        getOwnWebClientId,
+        isReadOnly && isRelayMode()
+    );
 }
 
-function setupSoftKeyboardVisibilityTracker(controlSend, getOwnWebClientId) {
+function setupSoftKeyboardVisibilityTracker(
+    controlSend,
+    getOwnWebClientId,
+    isRelayWatcher
+) {
     if (!window.visualViewport) {
         return;
     }
@@ -781,6 +800,12 @@ function setupSoftKeyboardVisibilityTracker(controlSend, getOwnWebClientId) {
         }
         kbdVisible = newKbdVisible;
 
+        window.dispatchEvent(
+            new CustomEvent("zellij:soft-keyboard-visibility", {
+                detail: { visible: kbdVisible },
+            })
+        );
+
         if (!kbdVisible) {
             const capture =
                 window.__zjSoftKbdCapture &&
@@ -791,7 +816,7 @@ function setupSoftKeyboardVisibilityTracker(controlSend, getOwnWebClientId) {
         }
 
         const ownWebClientId = getOwnWebClientId();
-        if (ownWebClientId === "") {
+        if (ownWebClientId === "" || isRelayWatcher) {
             return;
         }
         controlSend({

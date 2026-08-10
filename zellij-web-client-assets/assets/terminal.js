@@ -1,5 +1,5 @@
 import { build_link_handler } from "./links.js";
-import { isMobileViewport } from "./utils.js";
+import { isMobileViewport } from "/assets/utils.js";
 
 export const NATURAL_MIN_TOTAL_ROWS = 25;
 export const MOBILE_LEGIBLE_FLOOR_PX = 16;

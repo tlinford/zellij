@@ -37,21 +37,8 @@ pub const HANDSHAKE_HEAD_LINK_NAMES: &[&str] =
 pub const HANDSHAKE_RUNTIME_LOADED_NAMES: &[&str] = &["relay_crypto.wasm", "device-store.js"];
 
 pub const APPLICATION_ASSET_NAMES: &[&str] = &[
-    "app-entry.js",
-    "websockets.js",
-    "terminal.js",
-    "clip.js",
+    "app.js",
     "clip.wasm",
-    "mouse.js",
-    "input.js",
-    "keyboard.js",
-    "key-handler.js",
-    "touch.js",
-    "pinch.js",
-    "soft-keyboard.js",
-    "links.js",
-    "ime-bypass.js",
-    "native-promote.js",
     "xterm.js",
     "xterm.css",
     "addon-fit.js",

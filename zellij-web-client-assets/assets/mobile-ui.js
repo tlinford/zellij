@@ -1,4 +1,4 @@
-import { isMobileViewport, getBaseUrl } from "./utils.js";
+import { isMobileViewport, getBaseUrl } from "/assets/utils.js";
 
 const DARK_PALETTE = {
     "--zj-green": "#A3BD8D",
@@ -30,8 +30,17 @@ function paletteDeclarations(palette) {
         .join("\n      ");
 }
 
+const WRITE_CLASS_CONTROL = new Set([
+    "RequestSessionList",
+    "FocusPane",
+    "NewPaneInTab",
+    "NewTab",
+    "SetMobileRenderPreferences",
+]);
+
 const state = {
     active: false,
+    readOnly: false,
     standalone: false,
     renderMode: "full",
     initialPrefsSent: false,
@@ -49,9 +58,19 @@ let activityTimer = null;
 let initialized = false;
 let standalone = null;
 
+function resolveReadOnly(context) {
+    if (context && typeof context.isReadOnly === "boolean") {
+        return context.isReadOnly;
+    }
+    const el = document.getElementById("zellij-is-read-only");
+    return !!el && el.value === "true";
+}
+
 export function initMobileUi(context) {
     ctx = context;
+    state.readOnly = resolveReadOnly(context);
     if (initialized) {
+        render();
         return;
     }
     initialized = true;
@@ -243,7 +262,12 @@ function evaluateActivation() {
 // browser is a web client, but only this UI knows whether it activated, so the intent is sent
 // from here once the control channel exists.
 function sendInitialRenderPrefs() {
-    if (state.initialPrefsSent || !state.active || !window.__zjSendControl) {
+    if (
+        state.initialPrefsSent ||
+        !state.active ||
+        state.readOnly ||
+        !window.__zjSendControl
+    ) {
         return false;
     }
     state.initialPrefsSent = true;
@@ -604,10 +628,12 @@ function buildMenu() {
     });
 
     const changePane = document.createElement("button");
+    changePane.dataset.role = "change-pane";
     changePane.textContent = "Change Pane";
     changePane.addEventListener("click", () => openOverlay("panes"));
 
     const changeSession = document.createElement("button");
+    changeSession.dataset.role = "change-session";
     changeSession.textContent = "Change Session";
     changeSession.addEventListener("click", () => openOverlay("sessions"));
 
@@ -774,6 +800,9 @@ function installMenuDismissHook() {
 
 function openOverlay(kind) {
     closeMenu();
+    if (state.readOnly && !standalone) {
+        return;
+    }
     state.activeOverlay = kind;
     render();
     if (kind === "panes" || kind === "sessions") {
@@ -791,6 +820,9 @@ function openOverlay(kind) {
 }
 
 function sendControl(payload) {
+    if (state.readOnly && WRITE_CLASS_CONTROL.has(payload && payload.type)) {
+        return;
+    }
     if (window.__zjSendControl) {
         window.__zjSendControl(payload);
     }
@@ -1037,6 +1069,8 @@ function render() {
 
     els.sessionBtn.textContent = state.data.session_name || "session";
     els.paneBtn.textContent = activePaneLabel();
+    els.sessionBtn.style.display = state.readOnly ? "none" : "";
+    els.paneBtn.style.display = state.readOnly ? "none" : "";
 
     renderMenu();
     renderModifierBar();
@@ -1074,6 +1108,18 @@ function renderMenu() {
     if (!els.menu.classList.contains("zj-open")) {
         return;
     }
+    for (const role of [
+        "render-toggle",
+        "fit-toggle",
+        "change-pane",
+        "change-session",
+    ]) {
+        const el = els.menu.querySelector(`[data-role="${role}"]`);
+        if (el) {
+            el.style.display = state.readOnly ? "none" : "";
+        }
+    }
+
     const renderToggle = els.menu.querySelector('[data-role="render-toggle"]');
     renderToggle.textContent = `${checkbox(
         state.renderMode === "single-pane"
@@ -1091,7 +1137,7 @@ function renderMenu() {
 }
 
 function renderModifierBar() {
-    const visible = state.active && state.kbdVisible;
+    const visible = state.active && state.kbdVisible && !state.readOnly;
     els.modbar.classList.toggle("zj-visible", visible);
     for (const cell of MOD_CELLS) {
         const btn = els.modbar.querySelector(`[data-cell="${cell.id}"]`);
@@ -1132,6 +1178,9 @@ function renderSessionsHeader() {
 function setupPanesFooter() {
     const footer = els.panes._parts.footer;
     footer.innerHTML = "";
+    if (state.readOnly) {
+        return;
+    }
     const newTab = document.createElement("button");
     newTab.textContent = "+ New Tab";
     newTab.addEventListener("click", () => {
@@ -1157,6 +1206,9 @@ function setupPanesFooter() {
 function setupSessionsFooter() {
     const footer = els.sessions._parts.footer;
     footer.innerHTML = "";
+    if (state.readOnly) {
+        return;
+    }
     const newSession = document.createElement("button");
     newSession.textContent = "+ New Session";
     newSession.addEventListener("click", () => openOverlay("new-session"));
@@ -1251,6 +1303,9 @@ function renderCard(kind, item, indices) {
     meta.textContent = item.meta;
     card.append(title, meta);
     card.addEventListener("click", () => {
+        if (state.readOnly) {
+            return;
+        }
         if (kind === "sessions") {
             navigateToSession(item.name);
         } else {

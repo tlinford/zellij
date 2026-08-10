@@ -26,7 +26,7 @@ use aes_gcm::aead::{Aead, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use hkdf::Hkdf;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit as HmacKeyInit, Mac};
 use rand::rngs::OsRng;
 use rand::RngCore;
 use sha2::Sha256;
@@ -137,7 +137,7 @@ pub fn pake_finish(state: PakeState, peer_msg: &[u8]) -> Result<Vec<u8>, CryptoE
 
 fn confirmation_mac(pake_key: &[u8], label: u8, viewer_msg: &[u8], sharer_msg: &[u8]) -> HmacSha256 {
     let mut mac =
-        <HmacSha256 as Mac>::new_from_slice(pake_key).expect("HMAC accepts any key length");
+        <HmacSha256 as HmacKeyInit>::new_from_slice(pake_key).expect("HMAC accepts any key length");
     mac.update(&[label]);
     mac.update(&(viewer_msg.len() as u64).to_be_bytes());
     mac.update(viewer_msg);

@@ -57,8 +57,8 @@ type WsStream =
 async fn read_next_binary(stream: &mut WsStream) -> Option<Vec<u8>> {
     while let Some(msg) = stream.next().await {
         match msg {
-            Ok(Message::Binary(b)) => return Some(b),
-            Ok(Message::Text(t)) => return Some(t.into_bytes()),
+            Ok(Message::Binary(b)) => return Some(b.to_vec()),
+            Ok(Message::Text(t)) => return Some(t.as_bytes().to_vec()),
             Ok(Message::Close(_)) | Err(_) => return None,
             Ok(_) => continue,
         }
@@ -80,7 +80,7 @@ async fn perform_control_handshake(
         requested_slug: String::new(),
         read_only,
     };
-    ws_stream.send(Message::Binary(auth.encode())).await.unwrap();
+    ws_stream.send(Message::Binary(auth.encode().into())).await.unwrap();
     let reply_bytes = read_next_binary(&mut ws_stream)
         .await
         .expect("established reply");
@@ -134,7 +134,7 @@ async fn run_fake_sharer(mut control: WsStream, secret: Vec<u8>, slug: String) {
                     sharer_msg,
                     sharer_confirm: confirm.to_vec(),
                 };
-                let _ = control.send(Message::Binary(resp.encode())).await;
+                let _ = control.send(Message::Binary(resp.encode().into())).await;
             },
             ControlMessage::PakeConfirm {
                 request_id,
@@ -156,7 +156,7 @@ async fn run_fake_sharer(mut control: WsStream, secret: Vec<u8>, slug: String) {
                     client_id,
                     accepted: ok,
                 };
-                let _ = control.send(Message::Binary(result.encode())).await;
+                let _ = control.send(Message::Binary(result.encode().into())).await;
             },
             _ => {},
         }
@@ -254,7 +254,7 @@ async fn terminal_channel_links_tunnel() {
         tunnel_id: tunnel_id.clone(),
         token: shared_test_token().to_string(),
     };
-    ws_stream.send(Message::Binary(ready.encode())).await.unwrap();
+    ws_stream.send(Message::Binary(ready.encode().into())).await.unwrap();
     // The relay does not reply to a matching Ready; absence of an Error frame
     // within a short window indicates the link succeeded.
     let early = tokio::time::timeout(Duration::from_millis(200), read_next_binary(&mut ws_stream))
@@ -277,7 +277,7 @@ async fn terminal_channel_rejects_bad_token() {
         tunnel_id: tunnel_id.clone(),
         token: "not-a-real-token".into(),
     };
-    ws_stream.send(Message::Binary(ready.encode())).await.unwrap();
+    ws_stream.send(Message::Binary(ready.encode().into())).await.unwrap();
     let bytes = read_next_binary(&mut ws_stream)
         .await
         .expect("expected rejection frame");

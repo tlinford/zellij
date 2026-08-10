@@ -56,7 +56,7 @@ signal-hook = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 daemonize = { workspace = true }
-nix = { workspace = true, features = ["fs"] }
+nix = { workspace = true, features = ["fs", "hostname"] }
 
 [target.'cfg(windows)'.dependencies]
 crossterm = { workspace = true }

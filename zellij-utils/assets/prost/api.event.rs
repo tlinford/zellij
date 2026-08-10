@@ -714,6 +714,28 @@ pub struct ModeUpdatePayload {
     pub session_ascended: ::core::option::Option<bool>,
     #[prost(string, repeated, tag="22")]
     pub nested_descend_keys: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    #[prost(message, optional, tag="23")]
+    pub relay_share_status: ::core::option::Option<RelayShareStatus>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RelayShareStatus {
+    #[prost(enumeration="RelayShareState", tag="1")]
+    pub state: i32,
+    #[prost(string, optional, tag="2")]
+    pub url: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(uint32, optional, tag="4")]
+    pub attempt: ::core::option::Option<u32>,
+    #[prost(string, optional, tag="5")]
+    pub message: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(enumeration="RelayFailureReason", optional, tag="6")]
+    pub failure_reason: ::core::option::Option<i32>,
+    #[prost(uint32, optional, tag="7")]
+    pub supported_min: ::core::option::Option<u32>,
+    #[prost(uint32, optional, tag="8")]
+    pub supported_max: ::core::option::Option<u32>,
+    #[prost(uint32, optional, tag="9")]
+    pub offered_version: ::core::option::Option<u32>,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -1163,6 +1185,64 @@ impl MouseEventName {
             "MouseHover" => Some(Self::MouseHover),
             "MouseScrollLeft" => Some(Self::MouseScrollLeft),
             "MouseScrollRight" => Some(Self::MouseScrollRight),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum RelayShareState {
+    Connected = 0,
+    Reconnecting = 1,
+    Failed = 2,
+}
+impl RelayShareState {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            RelayShareState::Connected => "Connected",
+            RelayShareState::Reconnecting => "Reconnecting",
+            RelayShareState::Failed => "Failed",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "Connected" => Some(Self::Connected),
+            "Reconnecting" => Some(Self::Reconnecting),
+            "Failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum RelayFailureReason {
+    AuthRejected = 0,
+    ProtocolMismatch = 1,
+    Unreachable = 2,
+}
+impl RelayFailureReason {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            RelayFailureReason::AuthRejected => "AuthRejected",
+            RelayFailureReason::ProtocolMismatch => "ProtocolMismatch",
+            RelayFailureReason::Unreachable => "Unreachable",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "AuthRejected" => Some(Self::AuthRejected),
+            "ProtocolMismatch" => Some(Self::ProtocolMismatch),
+            "Unreachable" => Some(Self::Unreachable),
             _ => None,
         }
     }

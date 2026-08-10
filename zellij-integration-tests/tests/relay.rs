@@ -417,7 +417,7 @@ fn spawn_guest(dial_url: String) -> SpawnedGuest {
             }
             let _ = report.send(GuestEvent::Connected);
             let outcome =
-                runtime.block_on(run_remote_client_terminal_loop(Box::new(terminal), session));
+                runtime.block_on(run_remote_client_terminal_loop(Box::new(terminal), session, None));
             let _ = report.send(GuestEvent::Exited(outcome.map(|_| ()).map_err(|e| e.to_string())));
         })
         .unwrap();

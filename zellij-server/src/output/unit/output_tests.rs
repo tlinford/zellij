@@ -1583,6 +1583,8 @@ fn kitty_host_ids_stay_within_signed_32_bit_range() {
             }
         }
     }
+}
+
 /// Generate the fidelity fixture consumed by `zellij-ansi-clip`'s
 /// `t17_fidelity_anchor_40x120`. Not run by default — invoke with:
 ///

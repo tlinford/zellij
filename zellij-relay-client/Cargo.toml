@@ -19,7 +19,7 @@ notify = { workspace = true, optional = true }
 zellij-browser-bridge = { workspace = true, optional = true }
 zellij-relay-protocol = { workspace = true, optional = true }
 zellij-web-client-assets = { workspace = true, optional = true }
-tokio-tungstenite = { version = "0.20", features = ["rustls-tls-webpki-roots"], optional = true }
+tokio-tungstenite = { version = "0.28", features = ["rustls-tls-native-roots"], optional = true }
 futures-util = { version = "0.3", optional = true }
 isahc = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
@@ -39,9 +39,9 @@ base64 = { version = "0.22", optional = true }
 
 [dev-dependencies]
 axum = { version = "0.8.4", features = ["ws"] }
-axum-extra = { version = "0.10.1", features = ["cookie"] }
-axum-server = { version = "0.7", features = ["tls-rustls"] }
-rcgen = "0.13"
+axum-extra = { version = "0.12", features = ["cookie"] }
+axum-server = { version = "0.8", features = ["tls-rustls"] }
+rcgen = "0.14"
 tempfile = "3"
 serial_test = "3.0"
 

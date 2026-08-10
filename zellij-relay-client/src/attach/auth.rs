@@ -230,10 +230,27 @@ async fn authenticate_relay_pake(
     })
 }
 
+fn session_url(server_base_url: &str, session_name: &str) -> String {
+    // The relay resolves the session from the tunnel registry and the PAKE
+    // handshake, so the name is never put on the wire towards it: the request
+    // line is visible to the relay and the session name is not its business.
+    if session_name.is_empty() || relay_slug_from_url(server_base_url).is_some() {
+        format!("{}{}", server_base_url, SESSION_ENDPOINT)
+    } else {
+        format!(
+            "{}{}?session={}",
+            server_base_url,
+            SESSION_ENDPOINT,
+            urlencoding::encode(session_name)
+        )
+    }
+}
+
 pub async fn authenticate(
     server_base_url: &str,
     auth_token: &str,
     remember_me: bool,
+    session_name: &str,
     ca_cert: Option<&std::path::Path>,
     insecure: bool,
     link_id: Vec<u8>,
@@ -291,7 +308,7 @@ pub async fn authenticate(
     }
 
     // Step 2: Get session/client ID
-    let session_url = format!("{}{}", server_base_url, SESSION_ENDPOINT);
+    let session_url = session_url(server_base_url, session_name);
 
     let mut session_response = http_client
         .send_with_cookies(
@@ -366,6 +383,7 @@ pub async fn validate_session_token(
     server_base_url: &str,
     cookie_name: &str,
     cookie_value: &str,
+    session_name: &str,
     ca_cert: Option<&std::path::Path>,
     insecure: bool,
 ) -> Result<(SessionResponse, HttpClientWithCookies), RemoteClientError> {
@@ -377,7 +395,7 @@ pub async fn validate_session_token(
     http_client.set_cookie(cookie_name.to_string(), cookie_value.to_string());
 
     // Skip /login, go directly to /session endpoint
-    let session_url = format!("{}{}", server_base_url, SESSION_ENDPOINT);
+    let session_url = session_url(server_base_url, session_name);
 
     let mut session_response = http_client
         .send_with_cookies(

@@ -2026,6 +2026,10 @@ pub struct Options {
     pub mouse_scroll_resize: ::core::option::Option<bool>,
     #[prost(bool, optional, tag="55")]
     pub support_kitty_graphics_protocol: ::core::option::Option<bool>,
+    #[prost(string, optional, tag="56")]
+    pub relay_server_url: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(bool, optional, tag="57")]
+    pub encrypt_web_sharing: ::core::option::Option<bool>,
 }
 /// Pane-targeting action messages
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -2997,7 +3001,7 @@ impl NestedSessionHandling {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ClientToServerMsg {
-    #[prost(oneof="client_to_server_msg::Message", tags="1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26")]
+    #[prost(oneof="client_to_server_msg::Message", tags="1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27")]
     pub message: ::core::option::Option<client_to_server_msg::Message>,
 }
 /// Nested message and enum types in `ClientToServerMsg`.
@@ -3057,6 +3061,8 @@ pub mod client_to_server_msg {
         RequestSessionList(super::RequestSessionListMsg),
         #[prost(message, tag="26")]
         SetMobileRenderPreferences(super::SetMobileRenderPreferencesMsg),
+        #[prost(message, tag="27")]
+        AttachRelayWatcherClient(super::AttachRelayWatcherClientMsg),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -3121,6 +3127,16 @@ pub struct AttachWatcherClientMsg {
     #[prost(message, optional, tag="1")]
     pub terminal_size: ::core::option::Option<Size>,
     #[prost(bool, tag="2")]
+    pub is_web_client: bool,
+}
+/// Attach the client as a virtual watcher proxied through the relay for r/o
+/// fan-out. The relay already has an established tunnel so the terminal size
+/// is not negotiated here — the server registers the watcher at the current
+/// session viewport size.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AttachRelayWatcherClientMsg {
+    #[prost(bool, tag="1")]
     pub is_web_client: bool,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -3268,7 +3284,7 @@ impl HostTerminalThemeIndication {
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ServerToClientMsg {
-    #[prost(oneof="server_to_client_msg::Message", tags="1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19")]
+    #[prost(oneof="server_to_client_msg::Message", tags="1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20")]
     pub message: ::core::option::Option<server_to_client_msg::Message>,
 }
 /// Nested message and enum types in `ServerToClientMsg`.
@@ -3314,6 +3330,8 @@ pub mod server_to_client_msg {
         EmitNestedSessionFrame(super::EmitNestedSessionFrameMsg),
         #[prost(message, tag="19")]
         MobileState(super::MobileStateMsg),
+        #[prost(message, tag="20")]
+        SessionSize(super::SessionSizeMsg),
     }
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
@@ -3526,4 +3544,14 @@ pub struct MobileStateMsg {
     pub sessions: ::prost::alloc::vec::Vec<MobileSessionMsg>,
     #[prost(message, optional, tag="10")]
     pub render_prefs: ::core::option::Option<MobileRenderPrefsMsg>,
+}
+/// Delivered to relay-fan-out virtual watchers so the multiplexer can push
+/// the current session-viewport size out to the relay.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SessionSizeMsg {
+    #[prost(uint32, tag="1")]
+    pub rows: u32,
+    #[prost(uint32, tag="2")]
+    pub cols: u32,
 }

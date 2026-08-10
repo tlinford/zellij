@@ -40,10 +40,7 @@ pub struct AssetResponse {
 /// to the crate are picked up without a commit. Release builds + CI always
 /// use the committed `assets/clip.wasm`.
 #[cfg(feature = "clip_wasm_from_target")]
-static CLIP_WASM_FROM_TARGET: &[u8] = include_bytes!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../target/wasm32-unknown-unknown/release/zellij_ansi_clip.wasm"
-));
+static CLIP_WASM_FROM_TARGET: &[u8] = include_bytes!(env!("ZELLIJ_CLIP_WASM_PATH"));
 
 fn clip_wasm_override() -> Option<&'static [u8]> {
     #[cfg(feature = "clip_wasm_from_target")]

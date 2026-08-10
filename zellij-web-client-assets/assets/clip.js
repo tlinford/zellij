@@ -8,7 +8,7 @@
  */
 
 import { verifyWasmDigest } from "/assets/crypto.js";
-import { WASM_INTEGRITY } from "./integrity.js";
+import { WASM_INTEGRITY } from "/assets/integrity.js";
 
 let wasmExports = null;
 

@@ -56,12 +56,13 @@ impl BrowserBridge {
         id: ViewerId,
         link: Box<dyn SessionLink>,
         read_only: bool,
+        relay_fanout: bool,
         token_hash: String,
     ) {
         self.roster
             .lock()
             .unwrap()
-            .admit(id, link, read_only, token_hash);
+            .admit(id, link, read_only, relay_fanout, token_hash);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -117,7 +118,7 @@ impl BrowserBridge {
         } = spec;
         {
             let mut roster = self.roster.lock().unwrap();
-            roster.admit(id.clone(), link, read_only, token_hash);
+            roster.admit(id.clone(), link, read_only, relay_fanout, token_hash);
             roster.set_control_out(&id, sink.control_out);
             roster.set_terminal_out(&id, sink.terminal_out);
         }

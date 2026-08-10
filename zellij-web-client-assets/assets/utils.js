@@ -30,6 +30,29 @@ export function getBaseUrl() {
     return window.location.origin;
 }
 
+export function isCurrentLocation(target) {
+    try {
+        const targetUrl = new URL(target, window.location.href);
+        const stripTrailingSlash = (path) => path.replace(/\/$/, "");
+        return (
+            targetUrl.origin === window.location.origin &&
+            stripTrailingSlash(targetUrl.pathname) ===
+                stripTrailingSlash(window.location.pathname)
+        );
+    } catch (_) {
+        return false;
+    }
+}
+
+export function isMobileViewport() {
+    return (
+        (window.matchMedia &&
+            window.matchMedia("(pointer: coarse)").matches &&
+            window.innerWidth < 600) ||
+        /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)
+    );
+}
+
 /**
  * Get the base URL from the base href tag and convert to WebSocket URL
  * @returns {string} WebSocket base URL

@@ -30,7 +30,7 @@ pub async fn open_terminal_tunnel(
         tunnel_id: tunnel_id.clone(),
         token: relay_tunnel_auth_token,
     };
-    sink.send(Message::Binary(ready.encode()))
+    sink.send(Message::Binary(ready.encode().into()))
         .await
         .context("sending TerminalReady ack")?;
 

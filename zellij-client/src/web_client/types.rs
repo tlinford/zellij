@@ -91,6 +91,8 @@ pub struct CreateClientIdResponse {
     /// Present regardless of the `e2e_encrypted` flag so the browser can
     /// always cache it (cheaply) and only use it when encryption is on.
     pub tunnel_id: String,
+    pub session_rows: u32,
+    pub session_cols: u32,
 }
 
 #[derive(Deserialize)]

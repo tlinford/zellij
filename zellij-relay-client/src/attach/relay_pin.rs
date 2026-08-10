@@ -374,11 +374,12 @@ mod tests {
             rcgen::KeyUsagePurpose::CrlSign,
         ];
         let ca = ca_params.self_signed(&ca_key).unwrap();
+        let issuer = rcgen::Issuer::from_params(&ca_params, &ca_key);
 
         let leaf = |key: &rcgen::KeyPair| {
             let mut params = rcgen::CertificateParams::new(vec!["localhost".to_string()]).unwrap();
             params.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
-            params.signed_by(key, &ca, &ca_key).unwrap()
+            params.signed_by(key, &issuer).unwrap()
         };
 
         let key_a = rcgen::KeyPair::generate().unwrap();
