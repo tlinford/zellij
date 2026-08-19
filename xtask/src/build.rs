@@ -32,10 +32,19 @@ pub fn build(sh: &Shell, flags: flags::Build) -> anyhow::Result<()> {
     }
 
     if let Some(out_dir) = flags.app_origin.clone() {
-        return stage_app_origin(
+        if flags.release {
+            return stage_app_origin(
+                sh,
+                &out_dir,
+                flags.app_host.as_deref(),
+                flags.relay_origin.as_deref(),
+            );
+        }
+        build_wasm_clip(sh, true, /* stage_to_assets */ false)?;
+        return stage_app_origin_dev(
             sh,
             &out_dir,
-            flags.app_host.as_deref(),
+            flags.app_host.as_deref().unwrap_or(DEFAULT_APP_HOST),
             flags.relay_origin.as_deref(),
         );
     }
@@ -689,8 +698,13 @@ pub fn stage_app_origin(
     )
 }
 
-pub fn stage_app_origin_dev(sh: &Shell, out_dir: &Path, app_authority: &str) -> anyhow::Result<()> {
-    stage_app_origin_inner(sh, out_dir, true, app_authority, None)
+pub fn stage_app_origin_dev(
+    sh: &Shell,
+    out_dir: &Path,
+    app_authority: &str,
+    relay_origin: Option<&str>,
+) -> anyhow::Result<()> {
+    stage_app_origin_inner(sh, out_dir, true, app_authority, relay_origin)
 }
 
 fn stage_app_origin_inner(
@@ -742,11 +756,15 @@ fn stage_app_origin_inner(
     if dev_clip_from_target {
         let target_clip = root
             .join("target/wasm32-unknown-unknown/release/zellij_ansi_clip.wasm");
-        if target_clip.is_file() {
-            sh.copy_file(&target_clip, &bundle_assets.join("clip.wasm"))?;
+        if !target_clip.is_file() {
+            return Err(anyhow::anyhow!(
+                "expected development clip.wasm at '{}'",
+                target_clip.display()
+            ));
         }
+        sh.copy_file(&target_clip, &bundle_assets.join("clip.wasm"))?;
     }
-    write_wasm_integrity_module(&bundle_assets, &["clip.wasm"], !dev_clip_from_target)?;
+    write_wasm_integrity_module(&bundle_assets, &["clip.wasm"], true)?;
 
     let (manifest_json, rolled_up) = build_app_manifest(&bundle_assets)?;
     std::fs::write(bundle_dir.join("app-manifest.json"), manifest_json)

@@ -33,7 +33,7 @@ pub fn relay_dev(sh: &Shell, flags: crate::flags::RelayDev) -> anyhow::Result<()
     let stage_wasm_to_assets = false;
     crate::build::build_wasm_clip(sh, build_release_wasm, stage_wasm_to_assets)
         .context("failed to build the zellij-ansi-clip wasm blob")?;
-    crate::build::stage_app_origin_dev(sh, &app_dir, &authority)
+    crate::build::stage_app_origin_dev(sh, &app_dir, &authority, None)
         .context("failed to stage the app-origin static site")?;
 
     if data_dir.exists() {
