@@ -622,7 +622,7 @@ impl RelayOriginConfig {
 
     fn csp(&self) -> String {
         format!(
-            "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' {} {}; manifest-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'",
+            "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' {} {}; manifest-src 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'",
             self.http_origin, self.websocket_origin
         )
     }
@@ -922,6 +922,11 @@ fn verify_app_origin_index(index_html: &str, relay: &RelayOriginConfig) -> anyho
         "<meta name=\"zellij-relay-origin\" content=\"{}\" />",
         relay.http_origin
     );
+    if index_html.matches("<base href=\"/\" />").count() != 1 {
+        return Err(anyhow::anyhow!(
+            "staged index.html must contain exactly one same-origin root base URL"
+        ));
+    }
     if index_html.matches(&expected_csp).count() != 1
         || index_html.matches(&expected_runtime).count() != 1
     {
@@ -1207,6 +1212,7 @@ mod app_origin_tests {
         let relay = RelayOriginConfig::parse("https://relay.example.com").unwrap();
         let mut lines: Vec<String> = vec![
             "<html>".to_string(),
+            "<base href=\"/\" />".to_string(),
             format!(
                 "<meta http-equiv=\"Content-Security-Policy\" content=\"{}\" />",
                 relay.csp()
@@ -1356,6 +1362,8 @@ mod app_origin_tests {
             "<meta name=\"zellij-relay-origin\" content=\"https://relay.zellij.online\" />"
         ));
         assert!(index.contains(expected_connect));
+        assert!(index.contains("<base href=\"/\" />"));
+        assert!(index.contains("base-uri 'self'"));
         assert_eq!(headers, expected_headers);
         assert_eq!(redirects, "/r/*  /index.html  200\n");
         assert!(!index.contains("relay.viewer-project.pages.dev"));

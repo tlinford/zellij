@@ -110,7 +110,7 @@ host **should also send these as real HTTP response headers**. Some directives
 headers:
 
 ```
-Content-Security-Policy: default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://relay.example.com wss://relay.example.com; manifest-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'
+Content-Security-Policy: default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://relay.example.com wss://relay.example.com; manifest-src 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'
 Strict-Transport-Security: max-age=63072000; includeSubDomains
 X-Content-Type-Options: nosniff
 X-Frame-Options: DENY
@@ -120,6 +120,9 @@ Referrer-Policy: no-referrer
 Notes:
 - `'wasm-unsafe-eval'` is required to instantiate the SPAKE2/clip wasm.
 - `style-src 'unsafe-inline'` is required by xterm.js.
+- `base-uri 'self'` permits the generated `<base href="/">` needed when the
+  viewer shell is served from `/r/<slug>`, while still rejecting cross-origin
+  base URLs.
 - `connect-src` names only the app origin and the deployment's relay host.
   The baked CSP and browser runtime metadata are generated from the same
   validated relay configuration. Without `--relay-origin`, the relay is
