@@ -1,5 +1,6 @@
 pub mod alacritty_functions;
 pub mod grid;
+mod highlight_regex_cache;
 pub mod hyperlink_tracker;
 pub mod kitty_graphics;
 pub mod link_handler;

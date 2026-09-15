@@ -1,3 +1,4 @@
+use super::highlight_regex_cache::shared_highlight_regex;
 use super::kitty_graphics::{
     format_kitty_error, format_kitty_reply, KittyAction, KittyCommand, KittyCommandParser,
     KittyError, KittyErrorCode, KittyGrid, KittyHostSupport, KittyImageChunk, KittyImageStore,
@@ -12,6 +13,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 use unicode_width::UnicodeWidthChar;
 use zellij_utils::data::{
     HighlightLayer, HighlightStyle, HostTerminalThemeMode, RegexHighlight, Style,
@@ -966,7 +968,8 @@ fn encode_hex_ascii(value: &str) -> String {
 /// A compiled highlight entry for one plugin/pattern combination.
 #[derive(Clone)]
 pub struct CompiledHighlight {
-    pub regex: regex::Regex,
+    /// Shared between all panes using the same pattern, see `highlight_regex_cache`.
+    pub regex: Arc<regex::Regex>,
     pub fg: Option<AnsiCode>,
     pub bg: Option<AnsiCode>,
     pub context: BTreeMap<String, String>,
@@ -2845,7 +2848,7 @@ impl Grid {
             .or_insert_with(Vec::new);
         for h in highlights {
             let (fg, bg) = resolve_highlight_colors(&h.style, style);
-            if let Ok(regex) = regex::Regex::new(&h.pattern) {
+            if let Ok(regex) = shared_highlight_regex(&h.pattern) {
                 // Upsert: replace existing entry with same pattern and on_hover flag, or push new
                 let on_hover = h.on_hover;
                 if let Some(existing) = slot

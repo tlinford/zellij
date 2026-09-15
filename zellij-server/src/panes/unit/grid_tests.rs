@@ -8,6 +8,7 @@ use insta::assert_snapshot;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 use vte;
 use zellij_utils::consts::SCROLL_BUFFER_SIZE;
 use zellij_utils::{
@@ -4832,6 +4833,74 @@ fn set_plugin_regex_highlights_basic_match() {
     let entries = slot.unwrap();
     assert_eq!(entries.len(), 1);
     assert!(entries[0].1.regex.is_match("foo"));
+}
+
+#[test]
+fn set_plugin_regex_highlights_shares_compiled_regex_between_panes() {
+    use crate::panes::highlight_regex_cache::shared_highlight_regex_is_live;
+    let pattern = "grid_regex_cache_shared";
+    let mut grid1 = create_grid_with_content("hello\n");
+    let mut grid2 = create_grid_with_content("hello\n");
+    let highlight = || {
+        vec![create_highlight(
+            pattern,
+            false,
+            false,
+            false,
+            true,
+            HighlightLayer::Hint,
+        )]
+    };
+    grid1.set_plugin_regex_highlights(1, highlight(), &Style::default());
+    grid2.set_plugin_regex_highlights(1, highlight(), &Style::default());
+    grid2.set_plugin_regex_highlights(2, highlight(), &Style::default());
+    let regex1 = &grid1.plugin_highlights[&1][0].1.regex;
+    let regex2 = &grid2.plugin_highlights[&1][0].1.regex;
+    let regex3 = &grid2.plugin_highlights[&2][0].1.regex;
+    assert!(Arc::ptr_eq(regex1, regex2));
+    assert!(Arc::ptr_eq(regex1, regex3));
+    assert_eq!(Arc::strong_count(regex1), 3);
+    assert!(shared_highlight_regex_is_live(pattern));
+}
+
+#[test]
+fn plugin_highlight_regex_is_freed_on_clear_and_pane_close() {
+    use crate::panes::highlight_regex_cache::shared_highlight_regex_is_live;
+    let cleared = "grid_regex_cache_cleared";
+    let replaced = "grid_regex_cache_replaced";
+    let closed = "grid_regex_cache_closed";
+    let mut grid1 = create_grid_with_content("hello\n");
+    let mut grid2 = create_grid_with_content("hello\n");
+    let highlight =
+        |pattern: &str| create_highlight(pattern, false, false, false, true, HighlightLayer::Hint);
+    for grid in [&mut grid1, &mut grid2] {
+        grid.set_plugin_regex_highlights(1, vec![highlight(cleared)], &Style::default());
+        grid.set_plugin_regex_highlights(2, vec![highlight(replaced)], &Style::default());
+    }
+    grid2.set_plugin_regex_highlights(3, vec![highlight(closed)], &Style::default());
+
+    // clearing a plugin's highlights releases the regex only once no pane uses it
+    grid1.clear_plugin_highlights(1);
+    assert!(shared_highlight_regex_is_live(cleared));
+    grid2.clear_plugin_highlights(1);
+    assert!(!shared_highlight_regex_is_live(cleared));
+
+    // upserting the same pattern keeps sharing the live regex instead of recompiling
+    let before = grid1.plugin_highlights[&2][0].1.regex.clone();
+    grid1.set_plugin_regex_highlights(2, vec![highlight(replaced)], &Style::default());
+    assert!(Arc::ptr_eq(
+        &before,
+        &grid1.plugin_highlights[&2][0].1.regex
+    ));
+    drop(before);
+
+    // closing the pane drops its highlights
+    assert!(shared_highlight_regex_is_live(closed));
+    drop(grid2);
+    assert!(!shared_highlight_regex_is_live(closed));
+    assert!(shared_highlight_regex_is_live(replaced));
+    drop(grid1);
+    assert!(!shared_highlight_regex_is_live(replaced));
 }
 
 #[test]
