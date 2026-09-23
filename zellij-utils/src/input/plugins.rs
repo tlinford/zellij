@@ -1,4 +1,5 @@
 //! Plugins configuration metadata
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -99,7 +100,7 @@ impl PluginConfig {
     ///   /usr/share/zellij/plugins/tab-bar.wasm
     /// ```
     ///
-    pub fn resolve_wasm_bytes(&self, plugin_dir: &Path) -> Result<Vec<u8>> {
+    pub fn resolve_wasm_bytes(&self, plugin_dir: &Path) -> Result<Cow<'static, [u8]>> {
         let err_context =
             |err: std::io::Error, path: &PathBuf| format!("{}: '{}'", err, path.display());
 
@@ -126,7 +127,8 @@ impl PluginConfig {
         // errors and can report all of them back. We must initialize `last_err` with something,
         // and since the user will only get to see it when loading a plugin failed, we may as well
         // spell it out right here.
-        let mut last_err: Result<Vec<u8>> = Err(anyhow!("failed to load plugin from disk"));
+        let mut last_err: Result<Cow<'static, [u8]>> =
+            Err(anyhow!("failed to load plugin from disk"));
         for path in paths {
             // Check if the plugin path matches an entry in the asset map. If so, load it directly
             // from memory, don't bother with the disk.
@@ -144,7 +146,7 @@ impl PluginConfig {
                         );
                     }
 
-                    return Ok(bytes.to_vec());
+                    return Ok(Cow::Borrowed(*bytes));
                 }
             }
 
@@ -152,7 +154,7 @@ impl PluginConfig {
             match fs::read(&path) {
                 Ok(val) => {
                     log::debug!("Loaded plugin '{}' from disk", path.display());
-                    return Ok(val);
+                    return Ok(Cow::Owned(val));
                 },
                 Err(err) => {
                     last_err = last_err.with_context(|| err_context(err, &path));
