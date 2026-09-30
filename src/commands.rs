@@ -6,7 +6,9 @@ use std::{path::PathBuf, process, time::Duration};
 use isahc::{config::RedirectPolicy, prelude::*, HttpClient, Request};
 
 use zellij_client::{
-    os_input_output::get_client_os_input, start_client as start_client_impl, ClientInfo,
+    os_input_output::{get_client_os_input, ClientOsApi, ClientOsInputOutput},
+    os_input_output_headless::HeadlessClientOsApi,
+    start_client as start_client_impl, ClientInfo,
 };
 
 use zellij_utils::sessions::{
@@ -41,6 +43,7 @@ use zellij_utils::{
         config::{Config, ConfigError},
         options::Options,
     },
+    pane_size::Size,
     setup::Setup,
 };
 
@@ -162,6 +165,17 @@ fn get_os_input<OsInputOutput>(
             eprintln!("failed to open terminal:\n{}", e);
             process::exit(1);
         },
+    }
+}
+
+/// The client's view of its terminal: the real one, or a fixed size for `attach --headless`
+fn client_os_api(
+    os_input: ClientOsInputOutput,
+    headless_size: Option<Size>,
+) -> Box<dyn ClientOsApi> {
+    match headless_size {
+        Some(size) => Box::new(HeadlessClientOsApi::new(os_input, size)),
+        None => Box::new(os_input),
     }
 }
 
@@ -632,6 +646,13 @@ pub(crate) fn start_client(opts: CliArgs) {
 
     let mut reconnect_to_session: Option<ConnectToSession> = None;
     let os_input = get_os_input(get_client_os_input);
+    // Read once, before the loop: a session switch rebuilds `opts.command` without the
+    // headless flags, and a headless client has to stay headless across it.
+    let headless_size = opts.headless_size();
+    if headless_size.is_some() && !cfg!(unix) {
+        eprintln!("--headless is only supported on Unix for now.");
+        process::exit(2);
+    }
     loop {
         let os_input = os_input.clone();
         let mut config = config.clone();
@@ -721,6 +742,11 @@ pub(crate) fn start_client(opts: CliArgs) {
             }) {
                 if !cfg!(feature = "web_server_capability") {
                     eprintln!("This version of Zellij was compiled without web/remote-attach capabilities.");
+                    std::process::exit(2);
+                }
+
+                if headless_size.is_some() {
+                    eprintln!("Cannot attach to a remote session headless.");
                     std::process::exit(2);
                 }
 
@@ -837,7 +863,7 @@ pub(crate) fn start_client(opts: CliArgs) {
                     .as_ref()
                     .and_then(|r| r.pane_id.clone());
                 reconnect_to_session = start_client_impl(
-                    Box::new(os_input),
+                    client_os_api(os_input, headless_size),
                     opts,
                     config,
                     config_options,
@@ -852,7 +878,7 @@ pub(crate) fn start_client(opts: CliArgs) {
             if let Some(session_name) = opts.session.clone() {
                 start_client_plan(session_name.clone());
                 reconnect_to_session = start_client_impl(
-                    Box::new(os_input),
+                    client_os_api(os_input, headless_size),
                     opts,
                     config,
                     config_options,
@@ -885,7 +911,7 @@ pub(crate) fn start_client(opts: CliArgs) {
                                 true,
                             );
                             reconnect_to_session = start_client_impl(
-                                Box::new(os_input),
+                                client_os_api(os_input, headless_size),
                                 opts,
                                 config,
                                 config_options,
@@ -899,7 +925,7 @@ pub(crate) fn start_client(opts: CliArgs) {
                         _ => {
                             start_client_plan(session_name.clone());
                             reconnect_to_session = start_client_impl(
-                                Box::new(os_input),
+                                client_os_api(os_input, headless_size),
                                 opts,
                                 config,
                                 config_options.clone(),
@@ -927,7 +953,7 @@ pub(crate) fn start_client(opts: CliArgs) {
                 let session_name = generate_unique_session_name_or_exit();
                 start_client_plan(session_name.clone());
                 reconnect_to_session = start_client_impl(
-                    Box::new(os_input),
+                    client_os_api(os_input, headless_size),
                     opts,
                     config,
                     config_options,
