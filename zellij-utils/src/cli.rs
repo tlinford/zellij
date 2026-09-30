@@ -6,6 +6,7 @@ use crate::{
         layout::PluginUserConfiguration,
         options::{Options, PaneFrameStyle},
     },
+    pane_size::Size,
 };
 use clap::builder::styling::{AnsiColor, Color, Style, Styles};
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -13,6 +14,11 @@ use serde::{Deserialize, Serialize};
 use std::net::IpAddr;
 use std::path::PathBuf;
 use url::Url;
+
+/// Rows an `attach --headless` client reports when `--rows` is not given
+pub const HEADLESS_DEFAULT_ROWS: u16 = 40;
+/// Columns an `attach --headless` client reports when `--cols` is not given
+pub const HEADLESS_DEFAULT_COLS: u16 = 120;
 
 const fn ansi(color: AnsiColor) -> Style {
     Style::new().fg_color(Some(Color::Ansi(color)))
@@ -123,6 +129,21 @@ impl CliArgs {
             return Some(options.clone());
         }
         None
+    }
+    /// The size an `attach --headless` client reports in place of a terminal's
+    pub fn headless_size(&self) -> Option<Size> {
+        match &self.command {
+            Some(Command::Sessions(Sessions::Attach {
+                headless: true,
+                rows,
+                cols,
+                ..
+            })) => Some(Size {
+                rows: usize::from(rows.unwrap_or(HEADLESS_DEFAULT_ROWS)),
+                cols: usize::from(cols.unwrap_or(HEADLESS_DEFAULT_COLS)),
+            }),
+            _ => None,
+        }
     }
     /// The clap command, named after the running distribution rather than after Zellij
     pub fn command_for_distribution() -> clap::Command {
@@ -366,6 +387,30 @@ pub enum Sessions {
         /// Create a detached session in the background if one does not exist
         #[clap(short('b'), long, value_parser)]
         create_background: bool,
+
+        /// Attach as a normal client without a terminal: report a fixed size, read
+        /// input from stdin and write the render stream to stdout (redirect it,
+        /// e.g. to /dev/null) [preview]
+        #[clap(long, value_parser, hide = true, conflicts_with("create_background"))]
+        headless: bool,
+
+        /// Rows a headless client reports [default: 40]
+        #[clap(
+            long,
+            hide = true,
+            requires("headless"),
+            value_parser = clap::value_parser!(u16).range(1..)
+        )]
+        rows: Option<u16>,
+
+        /// Columns a headless client reports [default: 120]
+        #[clap(
+            long,
+            hide = true,
+            requires("headless"),
+            value_parser = clap::value_parser!(u16).range(1..)
+        )]
+        cols: Option<u16>,
 
         /// Number of the session index in the active sessions ordered creation date.
         #[clap(long, value_parser)]

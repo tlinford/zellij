@@ -657,6 +657,9 @@ pub(crate) fn start_client(opts: CliArgs) {
                     session_name: reconnect_to_session.name.clone(),
                     create: true,
                     create_background: false,
+                    headless: false,
+                    rows: None,
+                    cols: None,
                     force_run_commands: false,
                     index: None,
                     options: None,
@@ -706,6 +709,7 @@ pub(crate) fn start_client(opts: CliArgs) {
             initial_command,
             close_on_exit,
             start_suspended,
+            ..
         })) = opts.command.clone()
         {
             if let Some(remote_session_url) = session_name.as_ref().and_then(|s| {

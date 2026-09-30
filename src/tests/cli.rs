@@ -2,6 +2,7 @@ use std::net::{IpAddr, Ipv4Addr};
 
 use clap::{CommandFactory, Parser};
 use zellij_utils::cli::{CliArgs, Command};
+use zellij_utils::pane_size::Size;
 
 const CLI_PARSE_TEST_STACK_SIZE: usize = 16 * 1024 * 1024;
 
@@ -140,4 +141,61 @@ fn web_cli_status_with_ip_and_port_works() {
     } else {
         panic!("Expected Web command");
     }
+}
+
+#[test]
+fn attach_headless_defaults_to_40_rows_by_120_cols() {
+    let args = try_parse(&["zellij", "attach", "s", "--headless"]).unwrap();
+    assert_eq!(
+        args.headless_size(),
+        Some(Size {
+            rows: 40,
+            cols: 120
+        })
+    );
+}
+
+#[test]
+fn attach_headless_takes_rows_and_cols() {
+    let args = try_parse(&[
+        "zellij",
+        "attach",
+        "s",
+        "--headless",
+        "--rows",
+        "30",
+        "--cols",
+        "100",
+    ])
+    .unwrap();
+    assert_eq!(
+        args.headless_size(),
+        Some(Size {
+            rows: 30,
+            cols: 100
+        })
+    );
+}
+
+#[test]
+fn attach_without_headless_has_no_headless_size() {
+    let args = try_parse(&["zellij", "attach", "s"]).unwrap();
+    assert_eq!(args.headless_size(), None);
+}
+
+#[test]
+fn attach_rows_and_cols_require_headless() {
+    assert!(try_parse(&["zellij", "attach", "s", "--rows", "30"]).is_err());
+    assert!(try_parse(&["zellij", "attach", "s", "--cols", "100"]).is_err());
+}
+
+#[test]
+fn attach_headless_conflicts_with_create_background() {
+    assert!(try_parse(&["zellij", "attach", "s", "--headless", "--create-background"]).is_err());
+}
+
+#[test]
+fn attach_headless_rejects_a_zero_size() {
+    assert!(try_parse(&["zellij", "attach", "s", "--headless", "--rows", "0"]).is_err());
+    assert!(try_parse(&["zellij", "attach", "s", "--headless", "--cols", "0"]).is_err());
 }
