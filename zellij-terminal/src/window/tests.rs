@@ -2428,11 +2428,15 @@ fn a_shift_drag_selects_across_the_whole_window_and_the_copy_key_copies_it() {
 }
 
 #[test]
-fn the_copy_key_reaches_the_session_when_nothing_is_selected() {
+fn the_copy_key_asks_the_session_to_copy_when_the_window_has_no_selection() {
     let mut harness = Harness::new(1, true, "");
     copy_key(&mut harness);
     assert_eq!(harness.clipboard_text(), None);
-    assert_eq!(harness.sent().len(), 1);
+    assert_eq!(
+        harness.actions(),
+        vec![Action::Copy],
+        "the session's own selection is copied, and the key doesn't reach the pane"
+    );
 }
 
 #[test]

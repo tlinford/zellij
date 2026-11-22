@@ -91,7 +91,11 @@ impl App {
             self.toggle_fullscreen();
             return;
         }
-        if keyboard::claims(&self.options.copy_keys, &press) && self.copy_selection() {
+        if keyboard::claims(&self.options.copy_keys, &press) {
+            // Without a selection of the window's own, copy the one made in the session.
+            if !self.copy_selection() {
+                self.send_action(zellij_utils::input::actions::Action::Copy);
+            }
             self.hide_pointer();
             self.stop_momentum();
             return;
